@@ -1,10 +1,18 @@
 //! This module provides an implementation of the $\mathbb{G}_2$ group of BLS12-381.
 
 use core::borrow::Borrow;
+use core::fmt;
 use core::iter::Sum;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-
+use group::{
+    prime::{PrimeCurve, PrimeCurveAffine, PrimeGroup},
+    Curve, Group, GroupEncoding, UncompressedEncoding,
+};
+use rand_core::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
+
+#[cfg(feature = "alloc")]
+use group::WnafGroup;
 
 use crate::fp::Fp;
 use crate::fp2::Fp2;
@@ -16,6 +24,7 @@ use crate::Scalar;
 ///
 /// Values of `G2Affine` are guaranteed to be in the $q$-order subgroup unless an
 /// "unchecked" API was misused.
+#[cfg_attr(docsrs, doc(cfg(feature = "groups")))]
 #[derive(Copy, Clone, Debug)]
 pub struct G2Affine {
     pub(crate) x: Fp2,
@@ -29,13 +38,20 @@ impl Default for G2Affine {
     }
 }
 
+#[cfg(feature = "zeroize")]
+impl zeroize::DefaultIsZeroes for G2Affine {}
+
+impl fmt::Display for G2Affine {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl<'a> From<&'a G2Projective> for G2Affine {
     fn from(p: &'a G2Projective) -> G2Affine {
         let zinv = p.z.invert().unwrap_or(Fp2::zero());
-        let zinv2 = zinv.square();
-        let x = p.x * zinv2;
-        let zinv3 = zinv2 * zinv;
-        let y = p.y * zinv3;
+        let x = p.x * zinv;
+        let y = p.y * zinv;
 
         let tmp = G2Affine {
             x,
@@ -160,22 +176,24 @@ impl_binops_additive_specify_output!(G2Affine, G2Projective, G2Projective);
 
 const B: Fp2 = Fp2 {
     c0: Fp::from_raw_unchecked([
-        0xaa270000000cfff3,
-        0x53cc0032fc34000a,
-        0x478fe97a6b0a807f,
-        0xb1d37ebee6ba24d7,
-        0x8ec9733bbf78ab2f,
-        0x9d645513d83de7e,
+        0xaa27_0000_000c_fff3,
+        0x53cc_0032_fc34_000a,
+        0x478f_e97a_6b0a_807f,
+        0xb1d3_7ebe_e6ba_24d7,
+        0x8ec9_733b_bf78_ab2f,
+        0x09d6_4551_3d83_de7e,
     ]),
     c1: Fp::from_raw_unchecked([
-        0xaa270000000cfff3,
-        0x53cc0032fc34000a,
-        0x478fe97a6b0a807f,
-        0xb1d37ebee6ba24d7,
-        0x8ec9733bbf78ab2f,
-        0x9d645513d83de7e,
+        0xaa27_0000_000c_fff3,
+        0x53cc_0032_fc34_000a,
+        0x478f_e97a_6b0a_807f,
+        0xb1d3_7ebe_e6ba_24d7,
+        0x8ec9_733b_bf78_ab2f,
+        0x09d6_4551_3d83_de7e,
     ]),
 };
+
+const B3: Fp2 = Fp2::add(&Fp2::add(&B, &B), &B);
 
 impl G2Affine {
     /// Returns the identity of the group: the point at infinity.
@@ -193,38 +211,38 @@ impl G2Affine {
         G2Affine {
             x: Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xf5f28fa202940a10,
-                    0xb3f5fb2687b4961a,
-                    0xa1a893b53e2ae580,
-                    0x9894999d1a3caee9,
-                    0x6f67b7631863366b,
-                    0x58191924350bcd7,
+                    0xf5f2_8fa2_0294_0a10,
+                    0xb3f5_fb26_87b4_961a,
+                    0xa1a8_93b5_3e2a_e580,
+                    0x9894_999d_1a3c_aee9,
+                    0x6f67_b763_1863_366b,
+                    0x0581_9192_4350_bcd7,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0xa5a9c0759e23f606,
-                    0xaaa0c59dbccd60c3,
-                    0x3bb17e18e2867806,
-                    0x1b1ab6cc8541b367,
-                    0xc2b6ed0ef2158547,
-                    0x11922a097360edf3,
+                    0xa5a9_c075_9e23_f606,
+                    0xaaa0_c59d_bccd_60c3,
+                    0x3bb1_7e18_e286_7806,
+                    0x1b1a_b6cc_8541_b367,
+                    0xc2b6_ed0e_f215_8547,
+                    0x1192_2a09_7360_edf3,
                 ]),
             },
             y: Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0x4c730af860494c4a,
-                    0x597cfa1f5e369c5a,
-                    0xe7e6856caa0a635a,
-                    0xbbefb5e96e0d495f,
-                    0x7d3a975f0ef25a2,
-                    0x83fd8e7e80dae5,
+                    0x4c73_0af8_6049_4c4a,
+                    0x597c_fa1f_5e36_9c5a,
+                    0xe7e6_856c_aa0a_635a,
+                    0xbbef_b5e9_6e0d_495f,
+                    0x07d3_a975_f0ef_25a2,
+                    0x0083_fd8e_7e80_dae5,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0xadc0fc92df64b05d,
-                    0x18aa270a2b1461dc,
-                    0x86adac6a3be4eba0,
-                    0x79495c4ec93da33a,
-                    0xe7175850a43ccaed,
-                    0xb2bc2a163de1bf2,
+                    0xadc0_fc92_df64_b05d,
+                    0x18aa_270a_2b14_61dc,
+                    0x86ad_ac6a_3be4_eba0,
+                    0x7949_5c4e_c93d_a33a,
+                    0xe717_5850_a43c_caed,
+                    0x0b2b_c2a1_63de_1bf2,
                 ]),
             },
             infinity: Choice::from(0u8),
@@ -455,15 +473,12 @@ impl G2Affine {
     /// exists within the $q$-order subgroup $\mathbb{G}_2$. This should always return true
     /// unless an "unchecked" API was used.
     pub fn is_torsion_free(&self) -> Choice {
-        const FQ_MODULUS_BYTES: [u8; 32] = [
-            1, 0, 0, 0, 255, 255, 255, 255, 254, 91, 254, 255, 2, 164, 189, 83, 5, 216, 161, 9, 8,
-            216, 57, 51, 72, 125, 157, 41, 83, 167, 237, 115,
-        ];
-
-        // Clear the r-torsion from the point and check if it is the identity
-        G2Projective::from(*self)
-            .multiply(&FQ_MODULUS_BYTES)
-            .is_identity()
+        // Algorithm from Section 4 of https://eprint.iacr.org/2021/1130
+        // Updated proof of correctness in https://eprint.iacr.org/2022/352
+        //
+        // Check that psi(P) == [x] P
+        let p = G2Projective::from(self);
+        p.psi().ct_eq(&p.mul_by_x())
     }
 
     /// Returns true if this point is on the curve. This should always return
@@ -475,11 +490,27 @@ impl G2Affine {
 }
 
 /// This is an element of $\mathbb{G}_2$ represented in the projective coordinate space.
+#[cfg_attr(docsrs, doc(cfg(feature = "groups")))]
 #[derive(Copy, Clone, Debug)]
 pub struct G2Projective {
     pub(crate) x: Fp2,
     pub(crate) y: Fp2,
     pub(crate) z: Fp2,
+}
+
+impl Default for G2Projective {
+    fn default() -> G2Projective {
+        G2Projective::identity()
+    }
+}
+
+#[cfg(feature = "zeroize")]
+impl zeroize::DefaultIsZeroes for G2Projective {}
+
+impl fmt::Display for G2Projective {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
 }
 
 impl<'a> From<&'a G2Affine> for G2Projective {
@@ -500,22 +531,20 @@ impl From<G2Affine> for G2Projective {
 
 impl ConstantTimeEq for G2Projective {
     fn ct_eq(&self, other: &Self) -> Choice {
-        // Is (xz^2, yz^3, z) equal to (x'z'^2, yz'^3, z') when converted to affine?
+        // Is (xz, yz, z) equal to (x'z', y'z', z') when converted to affine?
 
-        let z = other.z.square();
-        let x1 = self.x * z;
-        let z = z * other.z;
-        let y1 = self.y * z;
-        let z = self.z.square();
-        let x2 = other.x * z;
-        let z = z * self.z;
-        let y2 = other.y * z;
+        let x1 = self.x * other.z;
+        let x2 = other.x * self.z;
+
+        let y1 = self.y * other.z;
+        let y2 = other.y * self.z;
 
         let self_is_zero = self.z.is_zero();
         let other_is_zero = other.z.is_zero();
 
         (self_is_zero & other_is_zero) // Both point at infinity
-            | ((!self_is_zero) & (!other_is_zero) & x1.ct_eq(&x2) & y1.ct_eq(&y2)) // Neither point at infinity, coordinates are the same
+            | ((!self_is_zero) & (!other_is_zero) & x1.ct_eq(&x2) & y1.ct_eq(&y2))
+        // Neither point at infinity, coordinates are the same
     }
 }
 
@@ -597,6 +626,11 @@ impl_binops_additive!(G2Projective, G2Projective);
 impl_binops_multiplicative!(G2Projective, Scalar);
 impl_binops_multiplicative_mixed!(G2Affine, Scalar, G2Projective);
 
+#[inline(always)]
+fn mul_by_3b(x: Fp2) -> Fp2 {
+    x * B3
+}
+
 impl G2Projective {
     /// Returns the identity of the group: the point at infinity.
     pub fn identity() -> G2Projective {
@@ -613,38 +647,38 @@ impl G2Projective {
         G2Projective {
             x: Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xf5f28fa202940a10,
-                    0xb3f5fb2687b4961a,
-                    0xa1a893b53e2ae580,
-                    0x9894999d1a3caee9,
-                    0x6f67b7631863366b,
-                    0x58191924350bcd7,
+                    0xf5f2_8fa2_0294_0a10,
+                    0xb3f5_fb26_87b4_961a,
+                    0xa1a8_93b5_3e2a_e580,
+                    0x9894_999d_1a3c_aee9,
+                    0x6f67_b763_1863_366b,
+                    0x0581_9192_4350_bcd7,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0xa5a9c0759e23f606,
-                    0xaaa0c59dbccd60c3,
-                    0x3bb17e18e2867806,
-                    0x1b1ab6cc8541b367,
-                    0xc2b6ed0ef2158547,
-                    0x11922a097360edf3,
+                    0xa5a9_c075_9e23_f606,
+                    0xaaa0_c59d_bccd_60c3,
+                    0x3bb1_7e18_e286_7806,
+                    0x1b1a_b6cc_8541_b367,
+                    0xc2b6_ed0e_f215_8547,
+                    0x1192_2a09_7360_edf3,
                 ]),
             },
             y: Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0x4c730af860494c4a,
-                    0x597cfa1f5e369c5a,
-                    0xe7e6856caa0a635a,
-                    0xbbefb5e96e0d495f,
-                    0x7d3a975f0ef25a2,
-                    0x83fd8e7e80dae5,
+                    0x4c73_0af8_6049_4c4a,
+                    0x597c_fa1f_5e36_9c5a,
+                    0xe7e6_856c_aa0a_635a,
+                    0xbbef_b5e9_6e0d_495f,
+                    0x07d3_a975_f0ef_25a2,
+                    0x0083_fd8e_7e80_dae5,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0xadc0fc92df64b05d,
-                    0x18aa270a2b1461dc,
-                    0x86adac6a3be4eba0,
-                    0x79495c4ec93da33a,
-                    0xe7175850a43ccaed,
-                    0xb2bc2a163de1bf2,
+                    0xadc0_fc92_df64_b05d,
+                    0x18aa_270a_2b14_61dc,
+                    0x86ad_ac6a_3be4_eba0,
+                    0x7949_5c4e_c93d_a33a,
+                    0xe717_5850_a43c_caed,
+                    0x0b2b_c2a1_63de_1bf2,
                 ]),
             },
             z: Fp2::one(),
@@ -653,26 +687,26 @@ impl G2Projective {
 
     /// Computes the doubling of this point.
     pub fn double(&self) -> G2Projective {
-        // http://www.hyperelliptic.org/EFD/g2p/auto-shortw-jacobian-0.html#doubling-dbl-2009-l
-        //
-        // There are no points of order 2.
+        // Algorithm 9, https://eprint.iacr.org/2015/1060.pdf
 
-        let a = self.x.square();
-        let b = self.y.square();
-        let c = b.square();
-        let d = self.x + b;
-        let d = d.square();
-        let d = d - a - c;
-        let d = d + d;
-        let e = a + a + a;
-        let f = e.square();
-        let z3 = self.z * self.y;
+        let t0 = self.y.square();
+        let z3 = t0 + t0;
         let z3 = z3 + z3;
-        let x3 = f - (d + d);
-        let c = c + c;
-        let c = c + c;
-        let c = c + c;
-        let y3 = e * (d - x3) - c;
+        let z3 = z3 + z3;
+        let t1 = self.y * self.z;
+        let t2 = self.z.square();
+        let t2 = mul_by_3b(t2);
+        let x3 = t2 * z3;
+        let y3 = t0 + t2;
+        let z3 = t1 * z3;
+        let t1 = t2 + t2;
+        let t2 = t1 + t2;
+        let t0 = t0 - t2;
+        let y3 = t0 * y3;
+        let y3 = x3 + y3;
+        let t1 = self.x * self.y;
+        let x3 = t0 * t1;
+        let x3 = x3 + x3;
 
         let tmp = G2Projective {
             x: x3,
@@ -685,130 +719,79 @@ impl G2Projective {
 
     /// Adds this point to another point.
     pub fn add(&self, rhs: &G2Projective) -> G2Projective {
-        // This Jacobian point addition technique is based on the implementation in libsecp256k1,
-        // which assumes that rhs has z=1. Let's address the case of zero z-coordinates generally.
+        // Algorithm 7, https://eprint.iacr.org/2015/1060.pdf
 
-        // If self is the identity, return rhs. Otherwise, return self. The other cases will be
-        // predicated on neither self nor rhs being the identity.
-        let f1 = self.is_identity();
-        let res = G2Projective::conditional_select(self, rhs, f1);
-        let f2 = rhs.is_identity();
+        let t0 = self.x * rhs.x;
+        let t1 = self.y * rhs.y;
+        let t2 = self.z * rhs.z;
+        let t3 = self.x + self.y;
+        let t4 = rhs.x + rhs.y;
+        let t3 = t3 * t4;
+        let t4 = t0 + t1;
+        let t3 = t3 - t4;
+        let t4 = self.y + self.z;
+        let x3 = rhs.y + rhs.z;
+        let t4 = t4 * x3;
+        let x3 = t1 + t2;
+        let t4 = t4 - x3;
+        let x3 = self.x + self.z;
+        let y3 = rhs.x + rhs.z;
+        let x3 = x3 * y3;
+        let y3 = t0 + t2;
+        let y3 = x3 - y3;
+        let x3 = t0 + t0;
+        let t0 = x3 + t0;
+        let t2 = mul_by_3b(t2);
+        let z3 = t1 + t2;
+        let t1 = t1 - t2;
+        let y3 = mul_by_3b(y3);
+        let x3 = t4 * y3;
+        let t2 = t3 * t1;
+        let x3 = t2 - x3;
+        let y3 = y3 * t0;
+        let t1 = t1 * z3;
+        let y3 = t1 + y3;
+        let t0 = t0 * t3;
+        let z3 = z3 * t4;
+        let z3 = z3 + t0;
 
-        // If neither are the identity but x1 = x2 and y1 != y2, then return the identity
-        let z = rhs.z.square();
-        let u1 = self.x * z;
-        let z = z * rhs.z;
-        let s1 = self.y * z;
-        let z = self.z.square();
-        let u2 = rhs.x * z;
-        let z = z * self.z;
-        let s2 = rhs.y * z;
-        let f3 = u1.ct_eq(&u2) & (!s1.ct_eq(&s2));
-        let res =
-            G2Projective::conditional_select(&res, &G2Projective::identity(), (!f1) & (!f2) & f3);
-
-        let t = u1 + u2;
-        let m = s1 + s2;
-        let rr = t.square();
-        let m_alt = -u2;
-        let tt = u1 * m_alt;
-        let rr = rr + tt;
-
-        // Correct for x1 != x2 but y1 = -y2, which can occur because p - 1 is divisible by 3.
-        // libsecp256k1 does this by substituting in an alternative (defined) expression for lambda.
-        let degenerate = m.is_zero() & rr.is_zero();
-        let rr_alt = s1 + s1;
-        let m_alt = m_alt + u1;
-        let rr_alt = Fp2::conditional_select(&rr_alt, &rr, !degenerate);
-        let m_alt = Fp2::conditional_select(&m_alt, &m, !degenerate);
-
-        let n = m_alt.square();
-        let q = n * t;
-
-        let n = n.square();
-        let n = Fp2::conditional_select(&n, &m, degenerate);
-        let t = rr_alt.square();
-        let z3 = m_alt * self.z * rhs.z; // We allow rhs.z != 1, so we must account for this.
-        let z3 = z3 + z3;
-        let q = -q;
-        let t = t + q;
-        let x3 = t;
-        let t = t + t;
-        let t = t + q;
-        let t = t * rr_alt;
-        let t = t + n;
-        let y3 = -t;
-        let x3 = x3 + x3;
-        let x3 = x3 + x3;
-        let y3 = y3 + y3;
-        let y3 = y3 + y3;
-
-        let tmp = G2Projective {
+        G2Projective {
             x: x3,
             y: y3,
             z: z3,
-        };
-
-        G2Projective::conditional_select(&res, &tmp, (!f1) & (!f2) & (!f3))
+        }
     }
 
     /// Adds this point to another point in the affine model.
     pub fn add_mixed(&self, rhs: &G2Affine) -> G2Projective {
-        // This Jacobian point addition technique is based on the implementation in libsecp256k1,
-        // which assumes that rhs has z=1. Let's address the case of zero z-coordinates generally.
+        // Algorithm 8, https://eprint.iacr.org/2015/1060.pdf
 
-        // If self is the identity, return rhs. Otherwise, return self. The other cases will be
-        // predicated on neither self nor rhs being the identity.
-        let f1 = self.is_identity();
-        let res = G2Projective::conditional_select(self, &G2Projective::from(rhs), f1);
-        let f2 = rhs.is_identity();
-
-        // If neither are the identity but x1 = x2 and y1 != y2, then return the identity
-        let u1 = self.x;
-        let s1 = self.y;
-        let z = self.z.square();
-        let u2 = rhs.x * z;
-        let z = z * self.z;
-        let s2 = rhs.y * z;
-        let f3 = u1.ct_eq(&u2) & (!s1.ct_eq(&s2));
-        let res =
-            G2Projective::conditional_select(&res, &G2Projective::identity(), (!f1) & (!f2) & f3);
-
-        let t = u1 + u2;
-        let m = s1 + s2;
-        let rr = t.square();
-        let m_alt = -u2;
-        let tt = u1 * m_alt;
-        let rr = rr + tt;
-
-        // Correct for x1 != x2 but y1 = -y2, which can occur because p - 1 is divisible by 3.
-        // libsecp256k1 does this by substituting in an alternative (defined) expression for lambda.
-        let degenerate = m.is_zero() & rr.is_zero();
-        let rr_alt = s1 + s1;
-        let m_alt = m_alt + u1;
-        let rr_alt = Fp2::conditional_select(&rr_alt, &rr, !degenerate);
-        let m_alt = Fp2::conditional_select(&m_alt, &m, !degenerate);
-
-        let n = m_alt.square();
-        let q = n * t;
-
-        let n = n.square();
-        let n = Fp2::conditional_select(&n, &m, degenerate);
-        let t = rr_alt.square();
-        let z3 = m_alt * self.z;
-        let z3 = z3 + z3;
-        let q = -q;
-        let t = t + q;
-        let x3 = t;
-        let t = t + t;
-        let t = t + q;
-        let t = t * rr_alt;
-        let t = t + n;
-        let y3 = -t;
-        let x3 = x3 + x3;
-        let x3 = x3 + x3;
-        let y3 = y3 + y3;
-        let y3 = y3 + y3;
+        let t0 = self.x * rhs.x;
+        let t1 = self.y * rhs.y;
+        let t3 = rhs.x + rhs.y;
+        let t4 = self.x + self.y;
+        let t3 = t3 * t4;
+        let t4 = t0 + t1;
+        let t3 = t3 - t4;
+        let t4 = rhs.y * self.z;
+        let t4 = t4 + self.y;
+        let y3 = rhs.x * self.z;
+        let y3 = y3 + self.x;
+        let x3 = t0 + t0;
+        let t0 = x3 + t0;
+        let t2 = mul_by_3b(self.z);
+        let z3 = t1 + t2;
+        let t1 = t1 - t2;
+        let y3 = mul_by_3b(y3);
+        let x3 = t4 * y3;
+        let t2 = t3 * t1;
+        let x3 = t2 - x3;
+        let y3 = y3 * t0;
+        let t1 = t1 * z3;
+        let y3 = t1 + y3;
+        let t0 = t0 * t3;
+        let z3 = z3 * t4;
+        let z3 = z3 + t0;
 
         let tmp = G2Projective {
             x: x3,
@@ -816,7 +799,7 @@ impl G2Projective {
             z: z3,
         };
 
-        G2Projective::conditional_select(&res, &tmp, (!f1) & (!f2) & (!f3))
+        G2Projective::conditional_select(&tmp, self, rhs.is_identity())
     }
 
     fn multiply(&self, by: &[u8]) -> G2Projective {
@@ -841,7 +824,6 @@ impl G2Projective {
         acc
     }
 
-    #[cfg(feature = "endo")]
     fn psi(&self) -> G2Projective {
         // 1 / ((u+1) ^ ((q-1)/3))
         let psi_coeff_x = Fp2 {
@@ -885,7 +867,6 @@ impl G2Projective {
         }
     }
 
-    #[cfg(feature = "endo")]
     fn psi2(&self) -> G2Projective {
         // 1 / 2 ^ ((q-1)/3)
         let psi2_coeff_x = Fp2 {
@@ -901,17 +882,16 @@ impl G2Projective {
         };
 
         G2Projective {
-            // x = frobenius^2(x)/2^((p-1)/3)
-            x: self.x.frobenius_map().frobenius_map() * psi2_coeff_x,
-            // y = -frobenius^2(y)
-            y: self.y.frobenius_map().frobenius_map().neg(),
+            // x = frobenius^2(x)/2^((p-1)/3); note that q^2 is the order of the field.
+            x: self.x * psi2_coeff_x,
+            // y = -frobenius^2(y); note that q^2 is the order of the field.
+            y: self.y.neg(),
             // z = z
             z: self.z,
         }
     }
 
     /// Multiply `self` by `crate::BLS_X`, using double and add.
-    #[cfg(feature = "endo")]
     fn mul_by_x(&self) -> G2Projective {
         let mut xself = G2Projective::identity();
         // NOTE: in BLS12-381 we can just skip the first bit.
@@ -935,36 +915,15 @@ impl G2Projective {
     /// This is equivalent to multiplying by $h\_\textrm{eff} = 3(z^2 - 1) \cdot
     /// h_2$, where $h_2$ is the cofactor of $\mathbb{G}\_2$ and $z$ is the
     /// parameter of BLS12-381.
-    ///
-    /// The endomorphism is only actually used if the crate feature `endo` is
-    /// enabled, and it is disabled by default to mitigate potential patent
-    /// issues.
     pub fn clear_cofactor(&self) -> G2Projective {
-        #[cfg(feature = "endo")]
-        fn clear_cofactor(this: &G2Projective) -> G2Projective {
-            let t1 = this.mul_by_x(); // [x] P
-            let t2 = this.psi(); // psi(P)
+        let t1 = self.mul_by_x(); // [x] P
+        let t2 = self.psi(); // psi(P)
 
-            this.double().psi2() // psi^2(2P)
-                + (t1 + t2).mul_by_x() // psi^2(2P) + [x^2] P + [x] psi(P)
-                - t1 // psi^2(2P) + [x^2 - x] P + [x] psi(P)
-                - t2 // psi^2(2P) + [x^2 - x] P + [x - 1] psi(P)
-                - this // psi^2(2P) + [x^2 - x - 1] P + [x - 1] psi(P)
-        }
-
-        #[cfg(not(feature = "endo"))]
-        fn clear_cofactor(this: &G2Projective) -> G2Projective {
-            this.multiply(&[
-                0x51, 0x55, 0xa9, 0xaa, 0x5, 0x0, 0x2, 0xe8, 0xb4, 0xf6, 0xbb, 0xde, 0xa, 0x4c,
-                0x89, 0x59, 0xa3, 0xf6, 0x89, 0x66, 0xc0, 0xcb, 0x54, 0xe9, 0x1a, 0x7c, 0x47, 0xd7,
-                0x69, 0xec, 0xc0, 0x2e, 0xb0, 0x12, 0x12, 0x5d, 0x1, 0xbf, 0x82, 0x6d, 0x95, 0xdb,
-                0x31, 0x87, 0x17, 0x2f, 0x9c, 0x32, 0xe1, 0xff, 0x8, 0x15, 0x3, 0xff, 0x86, 0x99,
-                0x68, 0xd7, 0x5a, 0x14, 0xe9, 0xa8, 0xe2, 0x88, 0x28, 0x35, 0x1b, 0xa9, 0xe, 0x6a,
-                0x4c, 0x58, 0xb3, 0x75, 0xee, 0xf2, 0x8, 0x9f, 0xc6, 0xb,
-            ])
-        }
-
-        clear_cofactor(self)
+        self.double().psi2() // psi^2(2P)
+            + (t1 + t2).mul_by_x() // psi^2(2P) + [x^2] P + [x] psi(P)
+            - t1 // psi^2(2P) + [x^2 - x] P + [x] psi(P)
+            - t2 // psi^2(2P) + [x^2 - x] P + [x - 1] psi(P)
+            - self // psi^2(2P) + [x^2 - x - 1] P + [x - 1] psi(P)
     }
 
     /// Converts a batch of `G2Projective` elements into `G2Affine` elements. This
@@ -996,14 +955,11 @@ impl G2Projective {
             acc = Fp2::conditional_select(&(acc * p.z), &acc, skip);
 
             // Set the coordinates to the correct value
-            let tmp2 = tmp.square();
-            let tmp3 = tmp2 * tmp;
-
-            q.x = p.x * tmp2;
-            q.y = p.y * tmp3;
+            q.x = p.x * tmp;
+            q.y = p.y * tmp;
             q.infinity = Choice::from(0u8);
 
-            *q = G2Affine::conditional_select(&q, &G2Affine::identity(), skip);
+            *q = G2Affine::conditional_select(q, &G2Affine::identity(), skip);
         }
     }
 
@@ -1016,11 +972,246 @@ impl G2Projective {
     /// Returns true if this point is on the curve. This should always return
     /// true unless an "unchecked" API was used.
     pub fn is_on_curve(&self) -> Choice {
-        // Y^2 - X^3 = 4(u + 1)(Z^6)
+        // Y^2 Z = X^3 + b Z^3
 
-        (self.y.square() - (self.x.square() * self.x))
-            .ct_eq(&((self.z.square() * self.z).square() * B))
+        (self.y.square() * self.z).ct_eq(&(self.x.square() * self.x + self.z.square() * self.z * B))
             | self.z.is_zero()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct G2Compressed([u8; 96]);
+
+impl fmt::Debug for G2Compressed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0[..].fmt(f)
+    }
+}
+
+impl Default for G2Compressed {
+    fn default() -> Self {
+        G2Compressed([0; 96])
+    }
+}
+
+#[cfg(feature = "zeroize")]
+impl zeroize::DefaultIsZeroes for G2Compressed {}
+
+impl AsRef<[u8]> for G2Compressed {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsMut<[u8]> for G2Compressed {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl ConstantTimeEq for G2Compressed {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        self.0.ct_eq(&other.0)
+    }
+}
+
+impl Eq for G2Compressed {}
+impl PartialEq for G2Compressed {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        bool::from(self.ct_eq(other))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct G2Uncompressed([u8; 192]);
+
+impl fmt::Debug for G2Uncompressed {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.0[..].fmt(f)
+    }
+}
+
+impl Default for G2Uncompressed {
+    fn default() -> Self {
+        G2Uncompressed([0; 192])
+    }
+}
+
+#[cfg(feature = "zeroize")]
+impl zeroize::DefaultIsZeroes for G2Uncompressed {}
+
+impl AsRef<[u8]> for G2Uncompressed {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl AsMut<[u8]> for G2Uncompressed {
+    fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
+    }
+}
+
+impl ConstantTimeEq for G2Uncompressed {
+    fn ct_eq(&self, other: &Self) -> Choice {
+        self.0.ct_eq(&other.0)
+    }
+}
+
+impl Eq for G2Uncompressed {}
+impl PartialEq for G2Uncompressed {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        bool::from(self.ct_eq(other))
+    }
+}
+
+impl Group for G2Projective {
+    type Scalar = Scalar;
+
+    fn random(mut rng: impl RngCore) -> Self {
+        loop {
+            let x = Fp2::random(&mut rng);
+            let flip_sign = rng.next_u32() % 2 != 0;
+
+            // Obtain the corresponding y-coordinate given x as y = sqrt(x^3 + 4)
+            let p = ((x.square() * x) + B).sqrt().map(|y| G2Affine {
+                x,
+                y: if flip_sign { -y } else { y },
+                infinity: 0.into(),
+            });
+
+            if p.is_some().into() {
+                let p = p.unwrap().to_curve().clear_cofactor();
+
+                if bool::from(!p.is_identity()) {
+                    return p;
+                }
+            }
+        }
+    }
+
+    fn identity() -> Self {
+        Self::identity()
+    }
+
+    fn generator() -> Self {
+        Self::generator()
+    }
+
+    fn is_identity(&self) -> Choice {
+        self.is_identity()
+    }
+
+    #[must_use]
+    fn double(&self) -> Self {
+        self.double()
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl WnafGroup for G2Projective {
+    fn recommended_wnaf_for_num_scalars(num_scalars: usize) -> usize {
+        const RECOMMENDATIONS: [usize; 11] = [1, 3, 8, 20, 47, 126, 260, 826, 1501, 4555, 84071];
+
+        let mut ret = 4;
+        for r in &RECOMMENDATIONS {
+            if num_scalars > *r {
+                ret += 1;
+            } else {
+                break;
+            }
+        }
+
+        ret
+    }
+}
+
+impl PrimeGroup for G2Projective {}
+
+impl Curve for G2Projective {
+    type AffineRepr = G2Affine;
+
+    fn batch_normalize(p: &[Self], q: &mut [Self::AffineRepr]) {
+        Self::batch_normalize(p, q);
+    }
+
+    fn to_affine(&self) -> Self::AffineRepr {
+        self.into()
+    }
+}
+
+impl PrimeCurve for G2Projective {
+    type Affine = G2Affine;
+}
+
+impl PrimeCurveAffine for G2Affine {
+    type Scalar = Scalar;
+    type Curve = G2Projective;
+
+    fn identity() -> Self {
+        Self::identity()
+    }
+
+    fn generator() -> Self {
+        Self::generator()
+    }
+
+    fn is_identity(&self) -> Choice {
+        self.is_identity()
+    }
+
+    fn to_curve(&self) -> Self::Curve {
+        self.into()
+    }
+}
+
+impl GroupEncoding for G2Projective {
+    type Repr = G2Compressed;
+
+    fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
+        G2Affine::from_bytes(bytes).map(Self::from)
+    }
+
+    fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {
+        G2Affine::from_bytes_unchecked(bytes).map(Self::from)
+    }
+
+    fn to_bytes(&self) -> Self::Repr {
+        G2Affine::from(self).to_bytes()
+    }
+}
+
+impl GroupEncoding for G2Affine {
+    type Repr = G2Compressed;
+
+    fn from_bytes(bytes: &Self::Repr) -> CtOption<Self> {
+        Self::from_compressed(&bytes.0)
+    }
+
+    fn from_bytes_unchecked(bytes: &Self::Repr) -> CtOption<Self> {
+        Self::from_compressed_unchecked(&bytes.0)
+    }
+
+    fn to_bytes(&self) -> Self::Repr {
+        G2Compressed(self.to_compressed())
+    }
+}
+
+impl UncompressedEncoding for G2Affine {
+    type Uncompressed = G2Uncompressed;
+
+    fn from_uncompressed(bytes: &Self::Uncompressed) -> CtOption<Self> {
+        Self::from_uncompressed(&bytes.0)
+    }
+
+    fn from_uncompressed_unchecked(bytes: &Self::Uncompressed) -> CtOption<Self> {
+        Self::from_uncompressed_unchecked(&bytes.0)
+    }
+
+    fn to_uncompressed(&self) -> Self::Uncompressed {
+        G2Uncompressed(self.to_uncompressed())
     }
 }
 
@@ -1033,27 +1224,27 @@ fn test_is_on_curve() {
 
     let z = Fp2 {
         c0: Fp::from_raw_unchecked([
-            0xba7afa1f9a6fe250,
-            0xfa0f5b595eafe731,
-            0x3bdc477694c306e7,
-            0x2149be4b3949fa24,
-            0x64aa6e0649b2078c,
-            0x12b108ac33643c3e,
+            0xba7a_fa1f_9a6f_e250,
+            0xfa0f_5b59_5eaf_e731,
+            0x3bdc_4776_94c3_06e7,
+            0x2149_be4b_3949_fa24,
+            0x64aa_6e06_49b2_078c,
+            0x12b1_08ac_3364_3c3e,
         ]),
         c1: Fp::from_raw_unchecked([
-            0x125325df3d35b5a8,
-            0xdc469ef5555d7fe3,
-            0x2d716d2443106a9,
-            0x5a1db59a6ff37d0,
-            0x7cf7784e5300bb8f,
-            0x16a88922c7a5e844,
+            0x1253_25df_3d35_b5a8,
+            0xdc46_9ef5_555d_7fe3,
+            0x02d7_16d2_4431_06a9,
+            0x05a1_db59_a6ff_37d0,
+            0x7cf7_784e_5300_bb8f,
+            0x16a8_8922_c7a5_e844,
         ]),
     };
 
     let gen = G2Affine::generator();
     let mut test = G2Projective {
-        x: gen.x * (z.square()),
-        y: gen.y * (z.square() * z),
+        x: gen.x * z,
+        y: gen.y * z,
         z,
     };
 
@@ -1064,6 +1255,7 @@ fn test_is_on_curve() {
 }
 
 #[test]
+#[allow(clippy::eq_op)]
 fn test_affine_point_equality() {
     let a = G2Affine::generator();
     let b = G2Affine::identity();
@@ -1075,6 +1267,7 @@ fn test_affine_point_equality() {
 }
 
 #[test]
+#[allow(clippy::eq_op)]
 fn test_projective_point_equality() {
     let a = G2Projective::generator();
     let b = G2Projective::identity();
@@ -1086,26 +1279,26 @@ fn test_projective_point_equality() {
 
     let z = Fp2 {
         c0: Fp::from_raw_unchecked([
-            0xba7afa1f9a6fe250,
-            0xfa0f5b595eafe731,
-            0x3bdc477694c306e7,
-            0x2149be4b3949fa24,
-            0x64aa6e0649b2078c,
-            0x12b108ac33643c3e,
+            0xba7a_fa1f_9a6f_e250,
+            0xfa0f_5b59_5eaf_e731,
+            0x3bdc_4776_94c3_06e7,
+            0x2149_be4b_3949_fa24,
+            0x64aa_6e06_49b2_078c,
+            0x12b1_08ac_3364_3c3e,
         ]),
         c1: Fp::from_raw_unchecked([
-            0x125325df3d35b5a8,
-            0xdc469ef5555d7fe3,
-            0x2d716d2443106a9,
-            0x5a1db59a6ff37d0,
-            0x7cf7784e5300bb8f,
-            0x16a88922c7a5e844,
+            0x1253_25df_3d35_b5a8,
+            0xdc46_9ef5_555d_7fe3,
+            0x02d7_16d2_4431_06a9,
+            0x05a1_db59_a6ff_37d0,
+            0x7cf7_784e_5300_bb8f,
+            0x16a8_8922_c7a5_e844,
         ]),
     };
 
     let mut c = G2Projective {
-        x: a.x * (z.square()),
-        y: a.y * (z.square() * z),
+        x: a.x * z,
+        y: a.y * z,
         z,
     };
     assert!(bool::from(c.is_on_curve()));
@@ -1167,26 +1360,26 @@ fn test_projective_to_affine() {
 
     let z = Fp2 {
         c0: Fp::from_raw_unchecked([
-            0xba7afa1f9a6fe250,
-            0xfa0f5b595eafe731,
-            0x3bdc477694c306e7,
-            0x2149be4b3949fa24,
-            0x64aa6e0649b2078c,
-            0x12b108ac33643c3e,
+            0xba7a_fa1f_9a6f_e250,
+            0xfa0f_5b59_5eaf_e731,
+            0x3bdc_4776_94c3_06e7,
+            0x2149_be4b_3949_fa24,
+            0x64aa_6e06_49b2_078c,
+            0x12b1_08ac_3364_3c3e,
         ]),
         c1: Fp::from_raw_unchecked([
-            0x125325df3d35b5a8,
-            0xdc469ef5555d7fe3,
-            0x2d716d2443106a9,
-            0x5a1db59a6ff37d0,
-            0x7cf7784e5300bb8f,
-            0x16a88922c7a5e844,
+            0x1253_25df_3d35_b5a8,
+            0xdc46_9ef5_555d_7fe3,
+            0x02d7_16d2_4431_06a9,
+            0x05a1_db59_a6ff_37d0,
+            0x7cf7_784e_5300_bb8f,
+            0x16a8_8922_c7a5_e844,
         ]),
     };
 
     let c = G2Projective {
-        x: a.x * (z.square()),
-        y: a.y * (z.square() * z),
+        x: a.x * z,
+        y: a.y * z,
         z,
     };
 
@@ -1221,38 +1414,38 @@ fn test_doubling() {
             G2Affine {
                 x: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0xe9d9e2da9620f98b,
-                        0x54f1199346b97f36,
-                        0x3db3b820376bed27,
-                        0xcfdb31c9b0b64f4c,
-                        0x41d7c12786354493,
-                        0x5710794c255c064
+                        0xe9d9_e2da_9620_f98b,
+                        0x54f1_1993_46b9_7f36,
+                        0x3db3_b820_376b_ed27,
+                        0xcfdb_31c9_b0b6_4f4c,
+                        0x41d7_c127_8635_4493,
+                        0x0571_0794_c255_c064,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0xd6c1d3ca6ea0d06e,
-                        0xda0cbd905595489f,
-                        0x4f5352d43479221d,
-                        0x8ade5d736f8c97e0,
-                        0x48cc8433925ef70e,
-                        0x8d7ea71ea91ef81
+                        0xd6c1_d3ca_6ea0_d06e,
+                        0xda0c_bd90_5595_489f,
+                        0x4f53_52d4_3479_221d,
+                        0x8ade_5d73_6f8c_97e0,
+                        0x48cc_8433_925e_f70e,
+                        0x08d7_ea71_ea91_ef81,
                     ]),
                 },
                 y: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0x15ba26eb4b0d186f,
-                        0xd086d64b7e9e01e,
-                        0xc8b848dd652f4c78,
-                        0xeecf46a6123bae4f,
-                        0x255e8dd8b6dc812a,
-                        0x164142af21dcf93f
+                        0x15ba_26eb_4b0d_186f,
+                        0x0d08_6d64_b7e9_e01e,
+                        0xc8b8_48dd_652f_4c78,
+                        0xeecf_46a6_123b_ae4f,
+                        0x255e_8dd8_b6dc_812a,
+                        0x1641_42af_21dc_f93f,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0xf9b4a1a895984db4,
-                        0xd417b114cccff748,
-                        0x6856301fc89f086e,
-                        0x41c777878931e3da,
-                        0x3556b155066a2105,
-                        0xacf7d325cb89cf
+                        0xf9b4_a1a8_9598_4db4,
+                        0xd417_b114_cccf_f748,
+                        0x6856_301f_c89f_086e,
+                        0x41c7_7787_8931_e3da,
+                        0x3556_b155_066a_2105,
+                        0x00ac_f7d3_25cb_89cf,
                     ]),
                 },
                 infinity: Choice::from(0u8)
@@ -1276,26 +1469,26 @@ fn test_projective_addition() {
         {
             let z = Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xba7afa1f9a6fe250,
-                    0xfa0f5b595eafe731,
-                    0x3bdc477694c306e7,
-                    0x2149be4b3949fa24,
-                    0x64aa6e0649b2078c,
-                    0x12b108ac33643c3e,
+                    0xba7a_fa1f_9a6f_e250,
+                    0xfa0f_5b59_5eaf_e731,
+                    0x3bdc_4776_94c3_06e7,
+                    0x2149_be4b_3949_fa24,
+                    0x64aa_6e06_49b2_078c,
+                    0x12b1_08ac_3364_3c3e,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0x125325df3d35b5a8,
-                    0xdc469ef5555d7fe3,
-                    0x2d716d2443106a9,
-                    0x5a1db59a6ff37d0,
-                    0x7cf7784e5300bb8f,
-                    0x16a88922c7a5e844,
+                    0x1253_25df_3d35_b5a8,
+                    0xdc46_9ef5_555d_7fe3,
+                    0x02d7_16d2_4431_06a9,
+                    0x05a1_db59_a6ff_37d0,
+                    0x7cf7_784e_5300_bb8f,
+                    0x16a8_8922_c7a5_e844,
                 ]),
             };
 
             b = G2Projective {
-                x: b.x * (z.square()),
-                y: b.y * (z.square() * z),
+                x: b.x * z,
+                y: b.y * z,
                 z,
             };
         }
@@ -1310,26 +1503,26 @@ fn test_projective_addition() {
         {
             let z = Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xba7afa1f9a6fe250,
-                    0xfa0f5b595eafe731,
-                    0x3bdc477694c306e7,
-                    0x2149be4b3949fa24,
-                    0x64aa6e0649b2078c,
-                    0x12b108ac33643c3e,
+                    0xba7a_fa1f_9a6f_e250,
+                    0xfa0f_5b59_5eaf_e731,
+                    0x3bdc_4776_94c3_06e7,
+                    0x2149_be4b_3949_fa24,
+                    0x64aa_6e06_49b2_078c,
+                    0x12b1_08ac_3364_3c3e,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0x125325df3d35b5a8,
-                    0xdc469ef5555d7fe3,
-                    0x2d716d2443106a9,
-                    0x5a1db59a6ff37d0,
-                    0x7cf7784e5300bb8f,
-                    0x16a88922c7a5e844,
+                    0x1253_25df_3d35_b5a8,
+                    0xdc46_9ef5_555d_7fe3,
+                    0x02d7_16d2_4431_06a9,
+                    0x05a1_db59_a6ff_37d0,
+                    0x7cf7_784e_5300_bb8f,
+                    0x16a8_8922_c7a5_e844,
                 ]),
             };
 
             b = G2Projective {
-                x: b.x * (z.square()),
-                y: b.y * (z.square() * z),
+                x: b.x * z,
+                y: b.y * z,
                 z,
             };
         }
@@ -1345,7 +1538,7 @@ fn test_projective_addition() {
 
         let mut d = G2Projective::generator();
         for _ in 0..5 {
-            d = d + G2Projective::generator();
+            d += G2Projective::generator();
         }
         assert!(!bool::from(c.is_identity()));
         assert!(bool::from(c.is_on_curve()));
@@ -1358,12 +1551,12 @@ fn test_projective_addition() {
     {
         let beta = Fp2 {
             c0: Fp::from_raw_unchecked([
-                0xcd03c9e48671f071,
-                0x5dab22461fcda5d2,
-                0x587042afd3851b95,
-                0x8eb60ebe01bacb9e,
-                0x3f97d6e83d050d2,
-                0x18f0206554638741,
+                0xcd03_c9e4_8671_f071,
+                0x5dab_2246_1fcd_a5d2,
+                0x5870_42af_d385_1b95,
+                0x8eb6_0ebe_01ba_cb9e,
+                0x03f9_7d6e_83d0_50d2,
+                0x18f0_2065_5463_8741,
             ]),
             c1: Fp::zero(),
         };
@@ -1383,38 +1576,38 @@ fn test_projective_addition() {
             G2Affine::from(G2Projective {
                 x: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0x705abc799ca773d3,
-                        0xfe132292c1d4bf08,
-                        0xf37ece3e07b2b466,
-                        0x887e1c43f447e301,
-                        0x1e0970d033bc77e8,
-                        0x1985c81e20a693f2
+                        0x705a_bc79_9ca7_73d3,
+                        0xfe13_2292_c1d4_bf08,
+                        0xf37e_ce3e_07b2_b466,
+                        0x887e_1c43_f447_e301,
+                        0x1e09_70d0_33bc_77e8,
+                        0x1985_c81e_20a6_93f2,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0x1d79b25db36ab924,
-                        0x23948e4d529639d3,
-                        0x471ba7fb0d006297,
-                        0x2c36d4b4465dc4c0,
-                        0x82bbc3cfec67f538,
-                        0x51d2728b67bf952
+                        0x1d79_b25d_b36a_b924,
+                        0x2394_8e4d_5296_39d3,
+                        0x471b_a7fb_0d00_6297,
+                        0x2c36_d4b4_465d_c4c0,
+                        0x82bb_c3cf_ec67_f538,
+                        0x051d_2728_b67b_f952,
                     ])
                 },
                 y: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0x41b1bbf6576c0abf,
-                        0xb6cc93713f7a0f9a,
-                        0x6b65b43e48f3f01f,
-                        0xfb7a4cfcaf81be4f,
-                        0x3e32dadc6ec22cb6,
-                        0xbb0fc49d79807e3
+                        0x41b1_bbf6_576c_0abf,
+                        0xb6cc_9371_3f7a_0f9a,
+                        0x6b65_b43e_48f3_f01f,
+                        0xfb7a_4cfc_af81_be4f,
+                        0x3e32_dadc_6ec2_2cb6,
+                        0x0bb0_fc49_d798_07e3,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0x7d1397788f5f2ddf,
-                        0xab2907144ff0d8e8,
-                        0x5b7573e0cdb91f92,
-                        0x4cb8932dd31daf28,
-                        0x62bbfac6db052a54,
-                        0x11f95c16d14c3bbe
+                        0x7d13_9778_8f5f_2ddf,
+                        0xab29_0714_4ff0_d8e8,
+                        0x5b75_73e0_cdb9_1f92,
+                        0x4cb8_932d_d31d_af28,
+                        0x62bb_fac6_db05_2a54,
+                        0x11f9_5c16_d14c_3bbe,
                     ])
                 },
                 z: Fp2::one()
@@ -1440,26 +1633,26 @@ fn test_mixed_addition() {
         {
             let z = Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xba7afa1f9a6fe250,
-                    0xfa0f5b595eafe731,
-                    0x3bdc477694c306e7,
-                    0x2149be4b3949fa24,
-                    0x64aa6e0649b2078c,
-                    0x12b108ac33643c3e,
+                    0xba7a_fa1f_9a6f_e250,
+                    0xfa0f_5b59_5eaf_e731,
+                    0x3bdc_4776_94c3_06e7,
+                    0x2149_be4b_3949_fa24,
+                    0x64aa_6e06_49b2_078c,
+                    0x12b1_08ac_3364_3c3e,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0x125325df3d35b5a8,
-                    0xdc469ef5555d7fe3,
-                    0x2d716d2443106a9,
-                    0x5a1db59a6ff37d0,
-                    0x7cf7784e5300bb8f,
-                    0x16a88922c7a5e844,
+                    0x1253_25df_3d35_b5a8,
+                    0xdc46_9ef5_555d_7fe3,
+                    0x02d7_16d2_4431_06a9,
+                    0x05a1_db59_a6ff_37d0,
+                    0x7cf7_784e_5300_bb8f,
+                    0x16a8_8922_c7a5_e844,
                 ]),
             };
 
             b = G2Projective {
-                x: b.x * (z.square()),
-                y: b.y * (z.square() * z),
+                x: b.x * z,
+                y: b.y * z,
                 z,
             };
         }
@@ -1474,26 +1667,26 @@ fn test_mixed_addition() {
         {
             let z = Fp2 {
                 c0: Fp::from_raw_unchecked([
-                    0xba7afa1f9a6fe250,
-                    0xfa0f5b595eafe731,
-                    0x3bdc477694c306e7,
-                    0x2149be4b3949fa24,
-                    0x64aa6e0649b2078c,
-                    0x12b108ac33643c3e,
+                    0xba7a_fa1f_9a6f_e250,
+                    0xfa0f_5b59_5eaf_e731,
+                    0x3bdc_4776_94c3_06e7,
+                    0x2149_be4b_3949_fa24,
+                    0x64aa_6e06_49b2_078c,
+                    0x12b1_08ac_3364_3c3e,
                 ]),
                 c1: Fp::from_raw_unchecked([
-                    0x125325df3d35b5a8,
-                    0xdc469ef5555d7fe3,
-                    0x2d716d2443106a9,
-                    0x5a1db59a6ff37d0,
-                    0x7cf7784e5300bb8f,
-                    0x16a88922c7a5e844,
+                    0x1253_25df_3d35_b5a8,
+                    0xdc46_9ef5_555d_7fe3,
+                    0x02d7_16d2_4431_06a9,
+                    0x05a1_db59_a6ff_37d0,
+                    0x7cf7_784e_5300_bb8f,
+                    0x16a8_8922_c7a5_e844,
                 ]),
             };
 
             b = G2Projective {
-                x: b.x * (z.square()),
-                y: b.y * (z.square() * z),
+                x: b.x * z,
+                y: b.y * z,
                 z,
             };
         }
@@ -1509,7 +1702,7 @@ fn test_mixed_addition() {
 
         let mut d = G2Projective::generator();
         for _ in 0..5 {
-            d = d + G2Affine::generator();
+            d += G2Affine::generator();
         }
         assert!(!bool::from(c.is_identity()));
         assert!(bool::from(c.is_on_curve()));
@@ -1522,12 +1715,12 @@ fn test_mixed_addition() {
     {
         let beta = Fp2 {
             c0: Fp::from_raw_unchecked([
-                0xcd03c9e48671f071,
-                0x5dab22461fcda5d2,
-                0x587042afd3851b95,
-                0x8eb60ebe01bacb9e,
-                0x3f97d6e83d050d2,
-                0x18f0206554638741,
+                0xcd03_c9e4_8671_f071,
+                0x5dab_2246_1fcd_a5d2,
+                0x5870_42af_d385_1b95,
+                0x8eb6_0ebe_01ba_cb9e,
+                0x03f9_7d6e_83d0_50d2,
+                0x18f0_2065_5463_8741,
             ]),
             c1: Fp::zero(),
         };
@@ -1548,38 +1741,38 @@ fn test_mixed_addition() {
             G2Affine::from(G2Projective {
                 x: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0x705abc799ca773d3,
-                        0xfe132292c1d4bf08,
-                        0xf37ece3e07b2b466,
-                        0x887e1c43f447e301,
-                        0x1e0970d033bc77e8,
-                        0x1985c81e20a693f2
+                        0x705a_bc79_9ca7_73d3,
+                        0xfe13_2292_c1d4_bf08,
+                        0xf37e_ce3e_07b2_b466,
+                        0x887e_1c43_f447_e301,
+                        0x1e09_70d0_33bc_77e8,
+                        0x1985_c81e_20a6_93f2,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0x1d79b25db36ab924,
-                        0x23948e4d529639d3,
-                        0x471ba7fb0d006297,
-                        0x2c36d4b4465dc4c0,
-                        0x82bbc3cfec67f538,
-                        0x51d2728b67bf952
+                        0x1d79_b25d_b36a_b924,
+                        0x2394_8e4d_5296_39d3,
+                        0x471b_a7fb_0d00_6297,
+                        0x2c36_d4b4_465d_c4c0,
+                        0x82bb_c3cf_ec67_f538,
+                        0x051d_2728_b67b_f952,
                     ])
                 },
                 y: Fp2 {
                     c0: Fp::from_raw_unchecked([
-                        0x41b1bbf6576c0abf,
-                        0xb6cc93713f7a0f9a,
-                        0x6b65b43e48f3f01f,
-                        0xfb7a4cfcaf81be4f,
-                        0x3e32dadc6ec22cb6,
-                        0xbb0fc49d79807e3
+                        0x41b1_bbf6_576c_0abf,
+                        0xb6cc_9371_3f7a_0f9a,
+                        0x6b65_b43e_48f3_f01f,
+                        0xfb7a_4cfc_af81_be4f,
+                        0x3e32_dadc_6ec2_2cb6,
+                        0x0bb0_fc49_d798_07e3,
                     ]),
                     c1: Fp::from_raw_unchecked([
-                        0x7d1397788f5f2ddf,
-                        0xab2907144ff0d8e8,
-                        0x5b7573e0cdb91f92,
-                        0x4cb8932dd31daf28,
-                        0x62bbfac6db052a54,
-                        0x11f95c16d14c3bbe
+                        0x7d13_9778_8f5f_2ddf,
+                        0xab29_0714_4ff0_d8e8,
+                        0x5b75_73e0_cdb9_1f92,
+                        0x4cb8_932d_d31d_af28,
+                        0x62bb_fac6_db05_2a54,
+                        0x11f9_5c16_d14c_3bbe,
                     ])
                 },
                 z: Fp2::one()
@@ -1591,6 +1784,7 @@ fn test_mixed_addition() {
 }
 
 #[test]
+#[allow(clippy::eq_op)]
 fn test_projective_negation_and_subtraction() {
     let a = G2Projective::generator().double();
     assert_eq!(a + (-a), G2Projective::identity());
@@ -1608,16 +1802,16 @@ fn test_affine_negation_and_subtraction() {
 fn test_projective_scalar_multiplication() {
     let g = G2Projective::generator();
     let a = Scalar::from_raw([
-        0x2b568297a56da71c,
-        0xd8c39ecb0ef375d1,
-        0x435c38da67bfbf96,
-        0x8088a05026b659b2,
+        0x2b56_8297_a56d_a71c,
+        0xd8c3_9ecb_0ef3_75d1,
+        0x435c_38da_67bf_bf96,
+        0x8088_a050_26b6_59b2,
     ]);
     let b = Scalar::from_raw([
-        0x785fdd9b26ef8b85,
-        0xc997f25837695c18,
-        0x4c8dbc39e7b756c1,
-        0x70d9b6cc6d87df20,
+        0x785f_dd9b_26ef_8b85,
+        0xc997_f258_3769_5c18,
+        0x4c8d_bc39_e7b7_56c1,
+        0x70d9_b6cc_6d87_df20,
     ]);
     let c = a * b;
 
@@ -1628,16 +1822,16 @@ fn test_projective_scalar_multiplication() {
 fn test_affine_scalar_multiplication() {
     let g = G2Affine::generator();
     let a = Scalar::from_raw([
-        0x2b568297a56da71c,
-        0xd8c39ecb0ef375d1,
-        0x435c38da67bfbf96,
-        0x8088a05026b659b2,
+        0x2b56_8297_a56d_a71c,
+        0xd8c3_9ecb_0ef3_75d1,
+        0x435c_38da_67bf_bf96,
+        0x8088_a050_26b6_59b2,
     ]);
     let b = Scalar::from_raw([
-        0x785fdd9b26ef8b85,
-        0xc997f25837695c18,
-        0x4c8dbc39e7b756c1,
-        0x70d9b6cc6d87df20,
+        0x785f_dd9b_26ef_8b85,
+        0xc997_f258_3769_5c18,
+        0x4c8d_bc39_e7b7_56c1,
+        0x70d9_b6cc_6d87_df20,
     ]);
     let c = a * b;
 
@@ -1649,38 +1843,38 @@ fn test_is_torsion_free() {
     let a = G2Affine {
         x: Fp2 {
             c0: Fp::from_raw_unchecked([
-                0x89f550c813db6431,
-                0xa50be8c456cd8a1a,
-                0xa45b374114cae851,
-                0xbb6190f5bf7fff63,
-                0x970ca02c3ba80bc7,
-                0x2b85d24e840fbac,
+                0x89f5_50c8_13db_6431,
+                0xa50b_e8c4_56cd_8a1a,
+                0xa45b_3741_14ca_e851,
+                0xbb61_90f5_bf7f_ff63,
+                0x970c_a02c_3ba8_0bc7,
+                0x02b8_5d24_e840_fbac,
             ]),
             c1: Fp::from_raw_unchecked([
-                0x6888bc53d70716dc,
-                0x3dea6b4117682d70,
-                0xd8f5f930500ca354,
-                0x6b5ecb6556f5c155,
-                0xc96bef0434778ab0,
-                0x5081505515006ad,
+                0x6888_bc53_d707_16dc,
+                0x3dea_6b41_1768_2d70,
+                0xd8f5_f930_500c_a354,
+                0x6b5e_cb65_56f5_c155,
+                0xc96b_ef04_3477_8ab0,
+                0x0508_1505_5150_06ad,
             ]),
         },
         y: Fp2 {
             c0: Fp::from_raw_unchecked([
-                0x3cf1ea0d434b0f40,
-                0x1a0dc610e603e333,
-                0x7f89956160c72fa0,
-                0x25ee03decf6431c5,
-                0xeee8e206ec0fe137,
-                0x97592b226dfef28,
+                0x3cf1_ea0d_434b_0f40,
+                0x1a0d_c610_e603_e333,
+                0x7f89_9561_60c7_2fa0,
+                0x25ee_03de_cf64_31c5,
+                0xeee8_e206_ec0f_e137,
+                0x0975_92b2_26df_ef28,
             ]),
             c1: Fp::from_raw_unchecked([
-                0x71e8bb5f29247367,
-                0xa5fe049e211831ce,
-                0xce6b354502a3896,
-                0x93b012000997314e,
-                0x6759f3b6aa5b42ac,
-                0x156944c4dfe92bbb,
+                0x71e8_bb5f_2924_7367,
+                0xa5fe_049e_2118_31ce,
+                0x0ce6_b354_502a_3896,
+                0x93b0_1200_0997_314e,
+                0x6759_f3b6_aa5b_42ac,
+                0x1569_44c4_dfe9_2bbb,
             ]),
         },
         infinity: Choice::from(0u8),
@@ -1691,7 +1885,6 @@ fn test_is_torsion_free() {
     assert!(bool::from(G2Affine::generator().is_torsion_free()));
 }
 
-#[cfg(feature = "endo")]
 #[test]
 fn test_mul_by_x() {
     // multiplying by `x` a point in G2 is the same as multiplying by
@@ -1708,10 +1901,28 @@ fn test_mul_by_x() {
     assert_eq!(point.mul_by_x(), point * x);
 }
 
-#[cfg(feature = "endo")]
 #[test]
 fn test_psi() {
     let generator = G2Projective::generator();
+
+    let z = Fp2 {
+        c0: Fp::from_raw_unchecked([
+            0x0ef2ddffab187c0a,
+            0x2424522b7d5ecbfc,
+            0xc6f341a3398054f4,
+            0x5523ddf409502df0,
+            0xd55c0b5a88e0dd97,
+            0x066428d704923e52,
+        ]),
+        c1: Fp::from_raw_unchecked([
+            0x538bbe0c95b4878d,
+            0xad04a50379522881,
+            0x6d5c05bf5c12fb64,
+            0x4ce4a069a2d34787,
+            0x59ea6c8d0dffaeaf,
+            0x0d42a083a75bd6f3,
+        ]),
+    };
 
     // `point` is a random point in the curve
     let point = G2Projective {
@@ -1732,7 +1943,7 @@ fn test_psi() {
                 0x8613eafd9d81ffb1,
                 0x10fe54daa2d3d495,
             ]),
-        },
+        } * z,
         y: Fp2 {
             c0: Fp::from_raw_unchecked([
                 0x7de7edc43953b75c,
@@ -1751,24 +1962,7 @@ fn test_psi() {
                 0x1555b67fc7bbe73d,
             ]),
         },
-        z: Fp2 {
-            c0: Fp::from_raw_unchecked([
-                0x0ef2ddffab187c0a,
-                0x2424522b7d5ecbfc,
-                0xc6f341a3398054f4,
-                0x5523ddf409502df0,
-                0xd55c0b5a88e0dd97,
-                0x066428d704923e52,
-            ]),
-            c1: Fp::from_raw_unchecked([
-                0x538bbe0c95b4878d,
-                0xad04a50379522881,
-                0x6d5c05bf5c12fb64,
-                0x4ce4a069a2d34787,
-                0x59ea6c8d0dffaeaf,
-                0x0d42a083a75bd6f3,
-            ]),
-        },
+        z: z.square() * z,
     };
     assert!(bool::from(point.is_on_curve()));
 
@@ -1788,6 +1982,25 @@ fn test_psi() {
 
 #[test]
 fn test_clear_cofactor() {
+    let z = Fp2 {
+        c0: Fp::from_raw_unchecked([
+            0x0ef2ddffab187c0a,
+            0x2424522b7d5ecbfc,
+            0xc6f341a3398054f4,
+            0x5523ddf409502df0,
+            0xd55c0b5a88e0dd97,
+            0x066428d704923e52,
+        ]),
+        c1: Fp::from_raw_unchecked([
+            0x538bbe0c95b4878d,
+            0xad04a50379522881,
+            0x6d5c05bf5c12fb64,
+            0x4ce4a069a2d34787,
+            0x59ea6c8d0dffaeaf,
+            0x0d42a083a75bd6f3,
+        ]),
+    };
+
     // `point` is a random point in the curve
     let point = G2Projective {
         x: Fp2 {
@@ -1807,7 +2020,7 @@ fn test_clear_cofactor() {
                 0x8613eafd9d81ffb1,
                 0x10fe54daa2d3d495,
             ]),
-        },
+        } * z,
         y: Fp2 {
             c0: Fp::from_raw_unchecked([
                 0x7de7edc43953b75c,
@@ -1826,24 +2039,7 @@ fn test_clear_cofactor() {
                 0x1555b67fc7bbe73d,
             ]),
         },
-        z: Fp2 {
-            c0: Fp::from_raw_unchecked([
-                0x0ef2ddffab187c0a,
-                0x2424522b7d5ecbfc,
-                0xc6f341a3398054f4,
-                0x5523ddf409502df0,
-                0xd55c0b5a88e0dd97,
-                0x066428d704923e52,
-            ]),
-            c1: Fp::from_raw_unchecked([
-                0x538bbe0c95b4878d,
-                0xad04a50379522881,
-                0x6d5c05bf5c12fb64,
-                0x4ce4a069a2d34787,
-                0x59ea6c8d0dffaeaf,
-                0x0d42a083a75bd6f3,
-            ]),
-        },
+        z: z.square() * z,
     };
 
     assert!(bool::from(point.is_on_curve()));
@@ -1911,4 +2107,26 @@ fn test_batch_normalize() {
             }
         }
     }
+}
+
+#[cfg(feature = "zeroize")]
+#[test]
+fn test_zeroize() {
+    use zeroize::Zeroize;
+
+    let mut a = G2Affine::generator();
+    a.zeroize();
+    assert!(bool::from(a.is_identity()));
+
+    let mut a = G2Projective::generator();
+    a.zeroize();
+    assert!(bool::from(a.is_identity()));
+
+    let mut a = GroupEncoding::to_bytes(&G2Affine::generator());
+    a.zeroize();
+    assert_eq!(&a, &G2Compressed::default());
+
+    let mut a = UncompressedEncoding::to_uncompressed(&G2Affine::generator());
+    a.zeroize();
+    assert_eq!(&a, &G2Uncompressed::default());
 }

@@ -9,13 +9,13 @@
 //! * All operations are constant time unless explicitly noted.
 
 #![no_std]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 // Catch documentation errors caused by code changes.
-#![deny(intra_doc_link_resolution_failure)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 #![allow(clippy::too_many_arguments)]
-#![allow(clippy::unreadable_literal)]
 #![allow(clippy::many_single_char_names)]
 // This lint is described at
 // https://rust-lang.github.io/rust-clippy/master/index.html#suspicious_arithmetic_impl
@@ -68,14 +68,23 @@ mod fp12;
 mod fp6;
 
 // The BLS parameter x for BLS12-381 is -0xd201000000010000
-const BLS_X: u64 = 0xd201000000010000;
+#[cfg(feature = "groups")]
+const BLS_X: u64 = 0xd201_0000_0001_0000;
+#[cfg(feature = "groups")]
 const BLS_X_IS_NEGATIVE: bool = true;
 
 #[cfg(feature = "pairings")]
 mod pairings;
 
 #[cfg(feature = "pairings")]
-pub use pairings::{pairing, Gt, MillerLoopResult};
+pub use pairings::{pairing, Bls12, Gt, MillerLoopResult};
 
 #[cfg(all(feature = "pairings", feature = "alloc"))]
 pub use pairings::{multi_miller_loop, G2Prepared};
+
+/// Use the generic_array re-exported by digest to avoid a version mismatch
+#[cfg(feature = "experimental")]
+pub(crate) use digest::generic_array;
+
+#[cfg(feature = "experimental")]
+pub mod hash_to_curve;
