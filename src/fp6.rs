@@ -466,12 +466,12 @@ impl Fp6 {
         // be even faster, as the lookup-table would fit in L1 cache.
 
         // Precompute lut[i] = x^i for i in {0, ..., 255}
-        let mut lut : [Fp6; 256] = [Default::default(); 256];
+        let mut lut: [Fp6; 256] = [Default::default(); 256];
         lut[0] = Fp6::one();
         lut[1] = *self;
         for i in 1..128 {
-            lut[2*i] = lut[i].square();
-            lut[2*i + 1] = lut[2*i] * self;
+            lut[2 * i] = lut[i].square();
+            lut[2 * i + 1] = lut[2 * i] * self;
         }
 
         let mut res = Fp6::one();
@@ -487,20 +487,34 @@ impl Fp6 {
             }
 
             res *= lut[((e >> (7 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (6 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (5 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (4 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (3 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (2 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
+            for _ in 0..8 {
+                res = res.square();
+            }
             res *= lut[((e >> (1 * 8)) & 255u64) as usize];
-            for _ in 0..8 { res = res.square(); }
-            res *= lut[(e  & 255u64) as usize];
+            for _ in 0..8 {
+                res = res.square();
+            }
+            res *= lut[(e & 255u64) as usize];
         }
         res
     }

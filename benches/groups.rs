@@ -63,9 +63,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             b.iter(|| r.final_exponentiation())
         });
         let r = r.final_exponentiation();
-        c.bench_function("Gt serialize compressed", |b| {
-            b.iter(|| r.to_compressed())
-        });
+        c.bench_function("Gt serialize compressed", |b| b.iter(|| r.to_compressed()));
         c.bench_function("Gt serialize uncompressed", |b| {
             b.iter(|| r.to_uncompressed())
         });
