@@ -78,6 +78,7 @@ pub(crate) const MODULUS: Scalar = Scalar([
     0x53bda402fffe5bfe,
     0x3339d80809a1d805,
     0x73eda753299d7d48,
+]);
 
 /// The modulus as u32 limbs.
 #[cfg(all(feature = "bits", not(target_pointer_width = "64")))]
