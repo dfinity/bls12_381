@@ -41,6 +41,11 @@ impl ConditionallySelectable for MillerLoopResult {
 }
 
 impl MillerLoopResult {
+    pub fn is_identity(&self) -> bool {
+        let one = Fp12::one();
+        self.0.ct_eq(&one).into()
+    }
+
     /// This performs a "final exponentiation" routine to convert the result
     /// of a Miller loop into an element of `Gt` with help of efficient squaring
     /// operation in the so-called `cyclotomic subgroup` of `Fq6` so that
