@@ -197,8 +197,8 @@ impl Fp12 {
 impl Fp12 {
     pub fn to_bytes(self) -> [u8; 2 * 288] {
         let mut res = [0; 2 * 288];
-        res[..288].copy_from_slice(&self.c0.to_bytes());
-        res[288..].copy_from_slice(&self.c1.to_bytes());
+        res[..288].copy_from_slice(&self.c1.to_bytes());
+        res[288..].copy_from_slice(&self.c0.to_bytes());
 
         res
     }
