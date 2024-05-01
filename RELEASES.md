@@ -1,5 +1,10 @@
 # Unreleased
 
+# 0.9.0
+## Changed
+- Smaller stack usage during final exponentiation
+- Serialization of Gt elements
+
 # 0.8.0
 ## Changed
 - Bumped dependencies to `ff 0.13`, `group 0.13`, `pairing 0.23`.
