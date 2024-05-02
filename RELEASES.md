@@ -1,9 +1,15 @@
 # Unreleased
 
-# 0.9.0
+# ic_bls12_381 0.9.0
 ## Changed
+- Based on bls12_381 0.8
 - Smaller stack usage during final exponentiation
-- Serialization of Gt elements
+
+# ic_bls12_381 0.8.0
+## Changed
+- Based on bls12_381 0.7
+- Support serialization of Gt elements
+- Add zeroize support for Gt
 
 # 0.8.0
 ## Changed
