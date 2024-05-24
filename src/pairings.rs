@@ -45,8 +45,10 @@ impl MillerLoopResult {
     /// of a Miller loop into an element of `Gt` with help of efficient squaring
     /// operation in the so-called `cyclotomic subgroup` of `Fq6` so that
     /// it can be compared with other elements of `Gt`.
+    #[inline(never)]
     pub fn final_exponentiation(&self) -> Gt {
         #[must_use]
+        #[inline(never)]
         fn fp4_square(a: Fp2, b: Fp2) -> (Fp2, Fp2) {
             let t0 = a.square();
             let t1 = b.square();
@@ -63,6 +65,7 @@ impl MillerLoopResult {
         // Faster Squaring in the Cyclotomic Subgroup of Sixth Degree Extensions
         // https://eprint.iacr.org/2009/565.pdf
         #[must_use]
+        #[inline(never)]
         fn cyclotomic_square(f: Fp12) -> Fp12 {
             let mut z0 = f.c0.c0;
             let mut z4 = f.c0.c1;
@@ -112,6 +115,7 @@ impl MillerLoopResult {
             }
         }
         #[must_use]
+        #[inline(never)]
         fn cycolotomic_exp(f: Fp12) -> Fp12 {
             let x = BLS_X;
             let mut tmp = Fp12::one();
