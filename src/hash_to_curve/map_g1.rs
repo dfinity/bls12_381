@@ -581,7 +581,6 @@ fn map_to_curve_simple_swu(u: &Fp) -> G1Projective {
 
 /// Maps an iso-G1 point to a G1 point.
 fn iso_map(u: &G1Projective) -> G1Projective {
-    const COEFFS: [&[Fp]; 4] = [&ISO11_XNUM, &ISO11_XDEN, &ISO11_YNUM, &ISO11_YDEN];
 
     // unpack input point
     let G1Projective { x, y, z } = *u;
@@ -601,7 +600,12 @@ fn iso_map(u: &G1Projective) -> G1Projective {
 
     // compute map value by Horner's rule
     for idx in 0..4 {
-        let coeff = COEFFS[idx];
+        let coeff = match idx {
+            0 => &ISO11_XNUM[..],
+            1 => &ISO11_XDEN[..],
+            2 => &ISO11_YNUM[..],
+            _ => &ISO11_YDEN[..],
+        };
         let clast = coeff.len() - 1;
         mapvals[idx] = coeff[clast];
         for jdx in 0..clast {
