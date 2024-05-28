@@ -1,5 +1,10 @@
 # Unreleased
 
+# ic_bls12_381 0.9.1
+## Changed
+- Avoid problems with position independent code on thumbv6m-none-eabi devices
+- Smaller stack usage during final exponentiation
+
 # ic_bls12_381 0.9.0
 ## Changed
 - Based on bls12_381 0.8
