@@ -6,7 +6,7 @@ use core::{
     marker::PhantomData,
 };
 
-use digest::{Digest, ExtendableOutput, Update, XofReader, core_api::BlockSizeUser};
+use digest::{core_api::BlockSizeUser, Digest, ExtendableOutput, Update, XofReader};
 
 use crate::generic_array::{
     typenum::{Unsigned, U32},
