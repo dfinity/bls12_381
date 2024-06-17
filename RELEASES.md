@@ -1,5 +1,9 @@
 # Unreleased
 
+# ic_bls12_381 0.9.2
+## Changed
+- Update sha2/sha3/digest dependencies from 0.9 to 0.10
+
 # ic_bls12_381 0.9.1
 ## Changed
 - Avoid problems with position independent code on thumbv6m-none-eabi devices
