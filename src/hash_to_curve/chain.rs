@@ -326,6 +326,41 @@ pub fn chain_pm3div4(var0: &Fp) -> Fp {
 /// Bos-Coster (win=4) : 895 links, 17 variables
 /// Addition chain implementing exponentiation by (p**2 - 9) // 16.
 pub fn chain_p2m9div16(var0: &Fp2) -> Fp2 {
+    if cfg!(target_arch = "wasm32") {
+        /*
+         * LLVM (and therefore Rust) have a bug which causes incredibly slow
+         * compilation of certain functions when building for wasm targets. This bug
+         * unfortunately affects compilation of this function, causing builds for
+         * wasm32-unknown-unknown to take several minutes in release mode.
+         *
+         * We workaround it by skipping the precomputed addition chain and just
+         * directly executing the exponentation using a standard square-and-multiply
+         * algorithm.
+         *
+         * For reference
+         *
+         * https://github.com/rust-lang/rust/issues/91011
+         * https://github.com/rust-lang/rust/issues/115216
+         * https://github.com/llvm/llvm-project/issues/47793
+         */
+        let p_sq_m9_over16 = [
+            0xb26a_a000_01c7_18e3,
+            0xd7ce_d6b1_d763_82ea,
+            0x3162_c338_3621_13cf,
+            0x966b_f91e_d3e7_1b74,
+            0xb292_e85a_8709_1a04,
+            0x11d6_8619_c861_85c7,
+            0xef53_1493_3097_8ef0,
+            0x050a_62cf_d16d_dca6,
+            0x466e_59e4_9349_e8bd,
+            0x9e2d_c90e_50e7_046b,
+            0x74bd_278e_aa22_f25e,
+            0x002a_437a_4b8c_35fc,
+        ];
+
+        return var0.pow_vartime_extended(&p_sq_m9_over16[..]);
+    }
+
     let mut var1 = var0.square();
     //Self::sqr(var1, var0);                              /*    0 : 2 */
     let var2 = var1 * var0;
