@@ -1,5 +1,10 @@
 # Unreleased
 
+# ic_bls12_381 0.10.1
+## Changed
+- Work around an LLVM bug which caused very slow compilation when
+  building this crate for wasm32-unknown-unknown in release mode
+
 # ic_bls12_381 0.10
 ## Changed
 - Update sha2/sha3/digest dependencies from 0.9 to 0.10
