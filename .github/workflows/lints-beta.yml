@@ -11,12 +11,12 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v3
-      - uses: dtolnay/rust-toolchain@beta
+      - uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3.6.0
+      - uses: dtolnay/rust-toolchain@4214355880fc9d71f45c3396ca2d59d3c7850f3f # beta
         id: toolchain
       - run: rustup override set ${{steps.toolchain.outputs.name}}
       - name: Run Clippy (beta)
-        uses: actions-rs/clippy-check@v1
+        uses: actions-rs/clippy-check@b5b5f21f4797c02da247df37026fcd0a5024aa4d # v1.0.7
         continue-on-error: true
         with:
           name: Clippy (beta)
