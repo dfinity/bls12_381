@@ -39,16 +39,17 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: fetch
+          args: --locked
       - name: Build tests
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --release --tests --features experimental,zeroize
+          args: --locked --verbose --release --tests --features experimental,zeroize
       - name: Run tests
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --verbose --release --features experimental,zeroize
+          args: --locked --verbose --release --features experimental,zeroize
 
   no-std:
     name: Check no-std target ${{ matrix.target }}
@@ -71,11 +72,12 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: fetch
+          args: --locked
       - name: Build
         uses: actions-rs/cargo@v1
         with:
           command: build
-          args: --verbose --target ${{ matrix.target }} --no-default-features --features groups,pairings
+          args: --locked --verbose --target ${{ matrix.target }} --no-default-features --features groups,pairings
 
   doc-links:
     name: Nightly lint
@@ -91,6 +93,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: fetch
+          args: --locked
 
       # Ensure intra-documentation links all resolve correctly
       # Requires #![deny(intra_doc_link_resolution_failure)] in crate.
@@ -98,4 +101,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: doc
-          args: --document-private-items
+          args: --locked --document-private-items
