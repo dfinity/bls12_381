@@ -21,4 +21,4 @@ jobs:
         with:
           name: Clippy (beta)
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features --all-targets -- -W clippy::all
+          args: --locked --all-features --all-targets -- -W clippy::all

@@ -15,4 +15,4 @@ jobs:
         with:
           name: Clippy (MSRV)
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --all-features --all-targets -- 
+          args: --locked --all-features --all-targets -- 
