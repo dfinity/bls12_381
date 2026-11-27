@@ -28,6 +28,12 @@
 - On 32-bit ARM targets (e.g. Ledger devices), `Fp`/`Fp2` inversion, square
   roots and hashing to curves use square-and-multiply instead of upstream's new
   addition chains, which need several KiB of additional stack.
+- `experimental`: Bumped `digest` to 0.11, so hashing to curves needs
+  `digest` 0.11 hash functions (e.g. `sha2` 0.11, or `shake` for SHAKE128 and
+  SHAKE256, which moved out of `sha3` in 0.12). `HashToField::from_okm` now
+  takes a `hybrid-array` `Array` (`digest::array::Array`) instead of a
+  `GenericArray`, and `ArraySize` replaces `ArrayLength<u8>` in the trait
+  bounds. Hash outputs are unchanged.
 - Removed the wasm32 workaround for slow compilation from ic_bls12_381 0.10.1.
   Upstream's new addition chain for hashing to G2 compiles quickly with recent
   Rust toolchains (e.g. 1.100.0), and is about 12% faster than the

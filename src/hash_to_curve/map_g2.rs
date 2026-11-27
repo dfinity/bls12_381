@@ -3,11 +3,11 @@
 use subtle::{Choice, ConditionallyNegatable, ConditionallySelectable, ConstantTimeEq};
 
 use super::{HashToField, MapToCurve, Sgn0};
-use crate::chains::fp2::pow_by_p_squared_minus9_over16;
-use crate::generic_array::{
-    GenericArray,
+use crate::array::{
+    Array,
     typenum::{U32, U64, U128},
 };
+use crate::chains::fp2::pow_by_p_squared_minus9_over16;
 use crate::{fp::Fp, fp2::Fp2, g2::G2Projective};
 
 /// Coefficients of the 3-isogeny x map's numerator
@@ -371,9 +371,10 @@ impl HashToField for Fp2 {
     // k = 128
     type XofOutputLength = U32;
 
-    fn from_okm(okm: &GenericArray<u8, U128>) -> Fp2 {
-        let c0 = <Fp as HashToField>::from_okm(GenericArray::<u8, U64>::from_slice(&okm[..64]));
-        let c1 = <Fp as HashToField>::from_okm(GenericArray::<u8, U64>::from_slice(&okm[64..]));
+    fn from_okm(okm: &Array<u8, U128>) -> Fp2 {
+        let (c0, c1) = okm.split_ref::<U64>();
+        let c0 = <Fp as HashToField>::from_okm(c0);
+        let c1 = <Fp as HashToField>::from_okm(c1);
         Fp2 { c0, c1 }
     }
 }

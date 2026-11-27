@@ -12,8 +12,8 @@ mod map_g1;
 mod map_g2;
 mod map_scalar;
 
-use crate::generic_array::{
-    ArrayLength, GenericArray,
+use crate::array::{
+    Array, ArraySize,
     typenum::{IsLess, U256, Unsigned},
 };
 
@@ -28,17 +28,17 @@ pub trait HashToField: Sized {
     /// This must be set to `m * L = m * ceil((ceil(log2(p)) + k) / 8)`, where `p` is the
     /// characteristic of `Self`, `m` is the extension degree of `Self`, and `k` is the
     /// security parameter.
-    type InputLength: ArrayLength<u8>;
+    type InputLength: ArraySize;
 
     /// The number of bytes to read from the extensible output hash function.
     ///
     /// This must be set to `ceil(2 * k / 8)`, where `k` is the security parameter. This
     /// is used when handling DST values longer than 255 bytes.
-    type XofOutputLength: ArrayLength<u8> + IsLess<U256>;
+    type XofOutputLength: ArraySize + IsLess<U256>;
 
     /// Interprets the given output keying material as a big endian integer, and reduces
     /// it into a field element.
-    fn from_okm(okm: &GenericArray<u8, Self::InputLength>) -> Self;
+    fn from_okm(okm: &Array<u8, Self::InputLength>) -> Self;
 
     /// Hashes a byte string of arbitrary length into one or more elements of `Self`,
     /// using [`ExpandMessage`] variant `X`.
@@ -55,7 +55,7 @@ pub trait HashToField: Sized {
         let len_in_bytes = output.len() * len_per_elm;
         let mut expander = X::init_expand::<M, Self::XofOutputLength>(message, dst, len_in_bytes);
 
-        let mut buf = GenericArray::<u8, Self::InputLength>::default();
+        let mut buf = Array::<u8, Self::InputLength>::default();
         output.iter_mut().for_each(|item| {
             expander.read_into(&mut buf[..]);
             *item = Self::from_okm(&buf);

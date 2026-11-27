@@ -3,13 +3,10 @@
 
 use core::fmt::{self, Debug, Formatter};
 
-use digest::{
-    ExtendableOutput, FixedOutput, XofReader, core_api::BlockSizeUser,
-    generic_array::typenum::IsLess,
-};
+use digest::{ExtendableOutput, FixedOutput, XofReader, block_api::BlockSizeUser, typenum::IsLess};
 
-use crate::generic_array::{
-    ArrayLength, GenericArray,
+use crate::array::{
+    Array, ArraySize,
     typenum::{U256, Unsigned},
 };
 
@@ -49,7 +46,7 @@ impl ExpandMsgDst {
     fn for_xof<H, L>(dst: &[u8]) -> Self
     where
         H: Default + ExtendableOutput,
-        L: ArrayLength<u8> + IsLess<U256>,
+        L: ArraySize + IsLess<U256>,
     {
         let input_len = dst.len();
         ExpandMsgDst::new(|buf| {
@@ -135,7 +132,7 @@ pub trait ExpandMessage {
     fn init_expand<M, L>(message: M, dst: &[u8], len_in_bytes: usize) -> Self
     where
         M: Message,
-        L: ArrayLength<u8> + IsLess<U256>;
+        L: ArraySize + IsLess<U256>;
 
     /// Reads bytes from the generated output.
     fn read_into(&mut self, output: &mut [u8]) -> usize;
@@ -184,7 +181,7 @@ where
     fn init_expand<M, L>(message: M, dst: &[u8], len_in_bytes: usize) -> Self
     where
         M: Message,
-        L: ArrayLength<u8> + IsLess<U256>,
+        L: ArraySize + IsLess<U256>,
     {
         if len_in_bytes > u16::MAX as usize {
             panic!("Invalid ExpandMsgXof usage: len_in_bytes > u16::MAX");
@@ -229,8 +226,8 @@ where
 /// [dst]: https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16#section-5.3.3
 pub struct ExpandMsgXmd<H: FixedOutput> {
     dst: ExpandMsgDst,
-    b_0: GenericArray<u8, H::OutputSize>,
-    b_i: GenericArray<u8, H::OutputSize>,
+    b_0: Array<u8, H::OutputSize>,
+    b_i: Array<u8, H::OutputSize>,
     i: usize,
     b_offs: usize,
     remain: usize,
@@ -252,7 +249,7 @@ where
     fn init_expand<M, L>(message: M, dst: &[u8], len_in_bytes: usize) -> Self
     where
         M: Message,
-        L: ArrayLength<u8> + IsLess<U256>,
+        L: ArraySize + IsLess<U256>,
     {
         let hash_size = H::OutputSize::to_usize();
         let ell = len_in_bytes.div_ceil(hash_size);
@@ -265,7 +262,7 @@ where
 
         let dst = ExpandMsgDst::for_xmd::<H>(dst);
         let mut hash_b_0 =
-            H::default().chain(GenericArray::<u8, <H as BlockSizeUser>::BlockSize>::default());
+            H::default().chain(Array::<u8, <H as BlockSizeUser>::BlockSize>::default());
         message.input_message(|m| hash_b_0.update(m));
         let b_0 = hash_b_0
             .chain((len_in_bytes as u16).to_be_bytes())

@@ -3,13 +3,13 @@
 use subtle::{Choice, ConditionallyNegatable, ConditionallySelectable, ConstantTimeEq};
 
 use super::{HashToField, MapToCurve, Sgn0};
+use crate::array::{
+    Array,
+    typenum::{U32, U64},
+};
 use crate::chains::fp::pow_by_p_minus3_over4;
 use crate::fp::Fp;
 use crate::g1::G1Projective;
-use crate::generic_array::{
-    GenericArray,
-    typenum::{U32, U64},
-};
 
 /// Coefficients of the 11-isogeny x map's numerator
 const ISO11_XNUM: [Fp; 12] = [
@@ -510,7 +510,7 @@ impl HashToField for Fp {
     // k = 128
     type XofOutputLength = U32;
 
-    fn from_okm(okm: &GenericArray<u8, U64>) -> Fp {
+    fn from_okm(okm: &Array<u8, U64>) -> Fp {
         const F_2_256: Fp = Fp::from_raw_unchecked([
             0x075b_3cd7_c5ce_820f,
             0x3ec6_ba62_1c3e_db0b,
