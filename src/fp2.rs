@@ -2,10 +2,10 @@
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use rand_core::RngCore;
+use rand_core::TryRng;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
-use crate::fp::Fp;
+use crate::{chains::fp2 as chain, fp::Fp};
 
 #[derive(Copy, Clone)]
 pub struct Fp2 {
@@ -60,7 +60,7 @@ impl ConditionallySelectable for Fp2 {
     }
 }
 
-impl<'a> Neg for &'a Fp2 {
+impl Neg for &Fp2 {
     type Output = Fp2;
 
     #[inline]
@@ -78,7 +78,7 @@ impl Neg for Fp2 {
     }
 }
 
-impl<'a, 'b> Sub<&'b Fp2> for &'a Fp2 {
+impl<'b> Sub<&'b Fp2> for &Fp2 {
     type Output = Fp2;
 
     #[inline]
@@ -87,7 +87,7 @@ impl<'a, 'b> Sub<&'b Fp2> for &'a Fp2 {
     }
 }
 
-impl<'a, 'b> Add<&'b Fp2> for &'a Fp2 {
+impl<'b> Add<&'b Fp2> for &Fp2 {
     type Output = Fp2;
 
     #[inline]
@@ -96,7 +96,7 @@ impl<'a, 'b> Add<&'b Fp2> for &'a Fp2 {
     }
 }
 
-impl<'a, 'b> Mul<&'b Fp2> for &'a Fp2 {
+impl<'b> Mul<&'b Fp2> for &Fp2 {
     type Output = Fp2;
 
     #[inline]
@@ -129,18 +129,23 @@ impl Fp2 {
         self.c0.is_zero() & self.c1.is_zero()
     }
 
-    pub(crate) fn random(mut rng: impl RngCore) -> Fp2 {
-        Fp2 {
-            c0: Fp::random(&mut rng),
-            c1: Fp::random(&mut rng),
-        }
+    #[cfg(feature = "alloc")]
+    pub(crate) fn is_zero_vartime(&self) -> bool {
+        self.c0.is_zero_vartime() && self.c1.is_zero_vartime()
+    }
+
+    pub(crate) fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Fp2, R::Error> {
+        Ok(Fp2 {
+            c0: Fp::try_random(rng)?,
+            c1: Fp::try_random(rng)?,
+        })
     }
 
     /// Raises this element to p.
     #[inline(always)]
     pub fn frobenius_map(&self) -> Self {
         // This is always just a conjugation. If you're curious why, here's
-        // an article about it: https://alicebob.cryptoland.net/the-frobenius-endomorphism-with-finite-fields/
+        // an article about it: https://alicebob.modp.net/the-frobenius-endomorphism-with-finite-fields/
         self.conjugate()
     }
 
@@ -192,13 +197,13 @@ impl Fp2 {
         // c0' = (c0 + c1) * (c0 - c1)
         // c1' = 2 * c0 * c1
 
-        let a = (&self.c0).add(&self.c1);
-        let b = (&self.c0).sub(&self.c1);
-        let c = (&self.c0).add(&self.c0);
+        let a = Fp::add(&self.c0, &self.c1);
+        let b = Fp::sub(&self.c0, &self.c1);
+        let c = Fp::add(&self.c0, &self.c0);
 
         Fp2 {
-            c0: (&a).mul(&b),
-            c1: (&c).mul(&self.c1),
+            c0: Fp::mul(&a, &b),
+            c1: Fp::mul(&c, &self.c1),
         }
     }
 
@@ -223,22 +228,22 @@ impl Fp2 {
 
     pub const fn add(&self, rhs: &Fp2) -> Fp2 {
         Fp2 {
-            c0: (&self.c0).add(&rhs.c0),
-            c1: (&self.c1).add(&rhs.c1),
+            c0: Fp::add(&self.c0, &rhs.c0),
+            c1: Fp::add(&self.c1, &rhs.c1),
         }
     }
 
     pub const fn sub(&self, rhs: &Fp2) -> Fp2 {
         Fp2 {
-            c0: (&self.c0).sub(&rhs.c0),
-            c1: (&self.c1).sub(&rhs.c1),
+            c0: Fp::sub(&self.c0, &rhs.c0),
+            c1: Fp::sub(&self.c1, &rhs.c1),
         }
     }
 
     pub const fn neg(&self) -> Fp2 {
         Fp2 {
-            c0: (&self.c0).neg(),
-            c1: (&self.c1).neg(),
+            c0: Fp::neg(&self.c0),
+            c1: Fp::neg(&self.c1),
         }
     }
 
@@ -248,14 +253,7 @@ impl Fp2 {
 
         CtOption::new(Fp2::zero(), self.is_zero()).or_else(|| {
             // a1 = self^((p - 3) / 4)
-            let a1 = self.pow_vartime(&[
-                0xee7f_bfff_ffff_eaaa,
-                0x07aa_ffff_ac54_ffff,
-                0xd9cc_34a8_3dac_3d89,
-                0xd91d_d2e1_3ce1_44af,
-                0x92c6_e9ed_90d2_eb35,
-                0x0680_447a_8e5f_f9a6,
-            ]);
+            let a1 = chain::pow_by_p_minus3_over4(self);
 
             // alpha = a1^2 * self = self^((p - 3) / 2 + 1) = self^((p - 1) / 2)
             let alpha = a1.square() * self;
@@ -272,19 +270,12 @@ impl Fp2 {
                     c0: -x0.c1,
                     c1: x0.c0,
                 },
-                alpha.ct_eq(&(&Fp2::one()).neg()),
+                alpha.ct_eq(&Fp2::one().neg()),
             )
             // Otherwise, the correct solution is (1 + alpha)^((q - 1) // 2) * x0
             .or_else(|| {
                 CtOption::new(
-                    (alpha + Fp2::one()).pow_vartime(&[
-                        0xdcff_7fff_ffff_d555,
-                        0x0f55_ffff_58a9_ffff,
-                        0xb398_6950_7b58_7b12,
-                        0xb23b_a5c2_79c2_895f,
-                        0x258d_d3db_21a5_d66b,
-                        0x0d00_88f5_1cbf_f34d,
-                    ]) * x0,
+                    chain::pow_by_p_minus1_over2(&(alpha + Fp2::one())) * x0,
                     Choice::from(1),
                 )
             })
@@ -294,9 +285,8 @@ impl Fp2 {
         })
     }
 
-    /// Computes the multiplicative inverse of this field
-    /// element, returning None in the case that this element
-    /// is zero.
+    /// Computes the multiplicative inverse of this field element, returning None if the
+    /// element is zero.
     pub fn invert(&self) -> CtOption<Self> {
         // We wish to find the multiplicative inverse of a nonzero
         // element a + bu in Fp2. We leverage an identity
@@ -318,6 +308,21 @@ impl Fp2 {
         })
     }
 
+    /// Computes the multiplicative inverse of this field element, returning None if the
+    /// element is zero or a noncanonical raw representation.
+    ///
+    /// Unlike [`Self::invert`], this computes the inverse in variable time, where the
+    /// running time depends on the element. Callers must accept leakage of its
+    /// representation.
+    pub(crate) fn invert_vartime(&self) -> Option<Self> {
+        // Same algorithm as `Self::invert`.
+        let inverse = (self.c0.square() + self.c1.square()).invert_vartime()?;
+        Some(Self {
+            c0: self.c0 * inverse,
+            c1: -(self.c1 * inverse),
+        })
+    }
+
     /// Although this is labeled "vartime", it is only
     /// variable time with respect to the exponent. It
     /// is also not exposed in the public API.
@@ -335,8 +340,9 @@ impl Fp2 {
         res
     }
 
-    /// Vartime exponentiation for larger exponents, only
-    /// used in testing and not exposed through the public API.
+    /// Vartime exponentiation for larger exponents. It is only variable time
+    /// with respect to the exponent, and is used by the arm fallback in
+    /// `chains::fp2` and in tests. It is not exposed through the public API.
     #[cfg(feature = "experimental")]
     pub(crate) fn pow_vartime_extended(&self, by: &[u64]) -> Self {
         let mut res = Self::one();
@@ -390,7 +396,7 @@ fn test_conditional_selection() {
 fn test_equality() {
     fn is_equal(a: &Fp2, b: &Fp2) -> bool {
         let eq = a == b;
-        let ct_eq = a.ct_eq(&b);
+        let ct_eq = a.ct_eq(b);
 
         assert_eq!(eq, bool::from(ct_eq));
 

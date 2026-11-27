@@ -7,7 +7,7 @@ use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 #[cfg(feature = "pairings")]
-use rand_core::RngCore;
+use rand_core::TryRng;
 
 /// This represents an element $c_0 + c_1 w$ of $\mathbb{F}_{p^12} = \mathbb{F}_{p^6} / w^2 - v$.
 pub struct Fp12 {
@@ -89,6 +89,24 @@ impl ConstantTimeEq for Fp12 {
 }
 
 impl Fp12 {
+    // Combine three Fp2 products with one reduction per Fp component.
+    // `sum_of_products` has six terms here. For canonical operands,
+    // 6p < R = 2^384, so its integrated Montgomery reduction produces
+    // a value below 2p and its one final subtraction is sufficient.
+    #[inline]
+    fn sum_of_three_fp2_products(a: &Fp2, b: &Fp2, c: &Fp2, d: &Fp2, e: &Fp2, f: &Fp2) -> Fp2 {
+        Fp2 {
+            c0: Fp::sum_of_products(
+                [a.c0, -a.c1, c.c0, -c.c1, e.c0, -e.c1],
+                [b.c0, b.c1, d.c0, d.c1, f.c0, f.c1],
+            ),
+            c1: Fp::sum_of_products(
+                [a.c0, a.c1, c.c0, c.c1, e.c0, e.c1],
+                [b.c1, b.c0, d.c1, d.c0, f.c1, f.c0],
+            ),
+        }
+    }
+
     #[inline]
     pub fn zero() -> Self {
         Fp12 {
@@ -106,25 +124,34 @@ impl Fp12 {
     }
 
     #[cfg(feature = "pairings")]
-    pub(crate) fn random(mut rng: impl RngCore) -> Self {
-        Fp12 {
-            c0: Fp6::random(&mut rng),
-            c1: Fp6::random(&mut rng),
-        }
+    pub(crate) fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
+        Ok(Fp12 {
+            c0: Fp6::try_random(rng)?,
+            c1: Fp6::try_random(rng)?,
+        })
     }
 
     pub fn mul_by_014(&self, c0: &Fp2, c1: &Fp2, c4: &Fp2) -> Fp12 {
-        let aa = self.c0.mul_by_01(c0, c1);
-        let bb = self.c1.mul_by_1(c4);
-        let o = c1 + c4;
-        let c1 = self.c1 + self.c0;
-        let c1 = c1.mul_by_01(c0, &o);
-        let c1 = c1 - aa - bb;
-        let c0 = bb;
-        let c0 = c0.mul_by_nonresidue();
-        let c0 = c0 + aa;
+        // In Fp12 = Fp2[v,w]/(v^3 - (u+1), w^2 - v), the sparse multiplier is
+        // c0 + c1*v + c4*v*w. Expand its six coefficients directly so each
+        // base-field coefficient needs only one Montgomery reduction.
+        let xc1 = c1.mul_by_nonresidue();
+        let xc4 = c4.mul_by_nonresidue();
+        let a = &self.c0;
+        let b = &self.c1;
 
-        Fp12 { c0, c1 }
+        Fp12 {
+            c0: Fp6 {
+                c0: Self::sum_of_three_fp2_products(&a.c0, c0, &a.c2, &xc1, &b.c1, &xc4),
+                c1: Self::sum_of_three_fp2_products(&a.c0, c1, &a.c1, c0, &b.c2, &xc4),
+                c2: Self::sum_of_three_fp2_products(&a.c1, c1, &a.c2, c0, &b.c0, c4),
+            },
+            c1: Fp6 {
+                c0: Self::sum_of_three_fp2_products(&a.c2, &xc4, &b.c0, c0, &b.c2, &xc1),
+                c1: Self::sum_of_three_fp2_products(&a.c0, c4, &b.c0, c1, &b.c1, c0),
+                c2: Self::sum_of_three_fp2_products(&a.c1, c4, &b.c1, c1, &b.c2, c0),
+            },
+        }
     }
 
     #[inline(always)]
@@ -206,7 +233,7 @@ impl Fp12 {
     }
 }
 
-impl<'a, 'b> Mul<&'b Fp12> for &'a Fp12 {
+impl<'b> Mul<&'b Fp12> for &Fp12 {
     type Output = Fp12;
 
     #[inline]
@@ -225,7 +252,72 @@ impl<'a, 'b> Mul<&'b Fp12> for &'a Fp12 {
     }
 }
 
-impl<'a, 'b> Add<&'b Fp12> for &'a Fp12 {
+#[cfg(feature = "pairings")]
+#[test]
+fn test_mul_by_014_matches_full_multiplication() {
+    use rand_core::SeedableRng;
+
+    let mut rng = rand_xorshift::XorShiftRng::from_seed([
+        0x21, 0x6d, 0x4b, 0x92, 0x8c, 0x11, 0x34, 0x7d, 0x9e, 0x04, 0xc3, 0xa8, 0x55, 0xb7, 0x20,
+        0x6f,
+    ]);
+
+    for _ in 0..32 {
+        let f = Fp12::try_random(&mut rng).unwrap();
+        let c0 = Fp2::try_random(&mut rng).unwrap();
+        let c1 = Fp2::try_random(&mut rng).unwrap();
+        let c4 = Fp2::try_random(&mut rng).unwrap();
+        let line = Fp12 {
+            c0: Fp6 {
+                c0,
+                c1,
+                c2: Fp2::zero(),
+            },
+            c1: Fp6 {
+                c0: Fp2::zero(),
+                c1: c4,
+                c2: Fp2::zero(),
+            },
+        };
+
+        assert_eq!(f.mul_by_014(&c0, &c1, &c4), f * line);
+    }
+
+    let near_modulus = Fp2 {
+        c0: -Fp::one(),
+        c1: -Fp::one(),
+    };
+    let f = Fp12 {
+        c0: Fp6 {
+            c0: near_modulus,
+            c1: near_modulus,
+            c2: near_modulus,
+        },
+        c1: Fp6 {
+            c0: near_modulus,
+            c1: near_modulus,
+            c2: near_modulus,
+        },
+    };
+    let line = Fp12 {
+        c0: Fp6 {
+            c0: near_modulus,
+            c1: near_modulus,
+            c2: Fp2::zero(),
+        },
+        c1: Fp6 {
+            c0: Fp2::zero(),
+            c1: near_modulus,
+            c2: Fp2::zero(),
+        },
+    };
+    assert_eq!(
+        f.mul_by_014(&near_modulus, &near_modulus, &near_modulus),
+        f * line,
+    );
+}
+
+impl<'b> Add<&'b Fp12> for &Fp12 {
     type Output = Fp12;
 
     #[inline]
@@ -237,7 +329,7 @@ impl<'a, 'b> Add<&'b Fp12> for &'a Fp12 {
     }
 }
 
-impl<'a> Neg for &'a Fp12 {
+impl Neg for &Fp12 {
     type Output = Fp12;
 
     #[inline]
@@ -258,7 +350,7 @@ impl Neg for Fp12 {
     }
 }
 
-impl<'a, 'b> Sub<&'b Fp12> for &'a Fp12 {
+impl<'b> Sub<&'b Fp12> for &Fp12 {
     type Output = Fp12;
 
     #[inline]

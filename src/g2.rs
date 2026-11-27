@@ -5,18 +5,18 @@ use core::fmt;
 use core::iter::Sum;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use group::{
-    prime::{PrimeCurve, PrimeCurveAffine, PrimeGroup},
-    Curve, Group, GroupEncoding, UncompressedEncoding,
+    Curve, CurveAffine, Group, GroupEncoding, UncompressedEncoding,
+    prime::{PrimeCurve, PrimeGroup},
 };
-use rand_core::RngCore;
+use rand_core::TryRng;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
 #[cfg(feature = "alloc")]
 use group::WnafGroup;
 
+use crate::Scalar;
 use crate::fp::Fp;
 use crate::fp2::Fp2;
-use crate::Scalar;
 
 /// This is an element of $\mathbb{G}_2$ represented in the affine coordinate space.
 /// It is ideal to keep elements in this representation to reduce memory usage and
@@ -101,7 +101,7 @@ impl PartialEq for G2Affine {
     }
 }
 
-impl<'a> Neg for &'a G2Affine {
+impl Neg for &G2Affine {
     type Output = G2Affine;
 
     #[inline]
@@ -123,7 +123,7 @@ impl Neg for G2Affine {
     }
 }
 
-impl<'a, 'b> Add<&'b G2Projective> for &'a G2Affine {
+impl<'b> Add<&'b G2Projective> for &G2Affine {
     type Output = G2Projective;
 
     #[inline]
@@ -132,7 +132,7 @@ impl<'a, 'b> Add<&'b G2Projective> for &'a G2Affine {
     }
 }
 
-impl<'a, 'b> Add<&'b G2Affine> for &'a G2Projective {
+impl<'b> Add<&'b G2Affine> for &G2Projective {
     type Output = G2Projective;
 
     #[inline]
@@ -141,7 +141,7 @@ impl<'a, 'b> Add<&'b G2Affine> for &'a G2Projective {
     }
 }
 
-impl<'a, 'b> Sub<&'b G2Projective> for &'a G2Affine {
+impl<'b> Sub<&'b G2Projective> for &G2Affine {
     type Output = G2Projective;
 
     #[inline]
@@ -150,7 +150,7 @@ impl<'a, 'b> Sub<&'b G2Projective> for &'a G2Affine {
     }
 }
 
-impl<'a, 'b> Sub<&'b G2Affine> for &'a G2Projective {
+impl<'b> Sub<&'b G2Affine> for &G2Projective {
     type Output = G2Projective;
 
     #[inline]
@@ -258,8 +258,8 @@ impl G2Affine {
 
         let mut res = [0; 96];
 
-        (&mut res[0..48]).copy_from_slice(&x.c1.to_bytes()[..]);
-        (&mut res[48..96]).copy_from_slice(&x.c0.to_bytes()[..]);
+        res[0..48].copy_from_slice(&x.c1.to_bytes()[..]);
+        res[48..96].copy_from_slice(&x.c0.to_bytes()[..]);
 
         // This point is in compressed form, so we set the most significant bit.
         res[0] |= 1u8 << 7;
@@ -566,7 +566,7 @@ impl PartialEq for G2Projective {
     }
 }
 
-impl<'a> Neg for &'a G2Projective {
+impl Neg for &G2Projective {
     type Output = G2Projective;
 
     #[inline]
@@ -588,7 +588,7 @@ impl Neg for G2Projective {
     }
 }
 
-impl<'a, 'b> Add<&'b G2Projective> for &'a G2Projective {
+impl<'b> Add<&'b G2Projective> for &G2Projective {
     type Output = G2Projective;
 
     #[inline]
@@ -597,7 +597,7 @@ impl<'a, 'b> Add<&'b G2Projective> for &'a G2Projective {
     }
 }
 
-impl<'a, 'b> Sub<&'b G2Projective> for &'a G2Projective {
+impl<'b> Sub<&'b G2Projective> for &G2Projective {
     type Output = G2Projective;
 
     #[inline]
@@ -606,7 +606,7 @@ impl<'a, 'b> Sub<&'b G2Projective> for &'a G2Projective {
     }
 }
 
-impl<'a, 'b> Mul<&'b Scalar> for &'a G2Projective {
+impl<'b> Mul<&'b Scalar> for &G2Projective {
     type Output = G2Projective;
 
     fn mul(self, other: &'b Scalar) -> Self::Output {
@@ -614,7 +614,7 @@ impl<'a, 'b> Mul<&'b Scalar> for &'a G2Projective {
     }
 }
 
-impl<'a, 'b> Mul<&'b G2Projective> for &'a Scalar {
+impl<'b> Mul<&'b G2Projective> for &Scalar {
     type Output = G2Projective;
 
     #[inline]
@@ -623,7 +623,7 @@ impl<'a, 'b> Mul<&'b G2Projective> for &'a Scalar {
     }
 }
 
-impl<'a, 'b> Mul<&'b Scalar> for &'a G2Affine {
+impl<'b> Mul<&'b Scalar> for &G2Affine {
     type Output = G2Projective;
 
     fn mul(self, other: &'b Scalar) -> Self::Output {
@@ -631,7 +631,7 @@ impl<'a, 'b> Mul<&'b Scalar> for &'a G2Affine {
     }
 }
 
-impl<'a, 'b> Mul<&'b G2Affine> for &'a Scalar {
+impl<'b> Mul<&'b G2Affine> for &Scalar {
     type Output = G2Projective;
 
     #[inline]
@@ -705,6 +705,18 @@ impl G2Projective {
         }
     }
 
+    /// Converts a point to affine form with coordinate-dependent timing.
+    pub fn to_affine_vartime(&self) -> G2Affine {
+        let Some(zinv) = self.z.invert_vartime() else {
+            return G2Affine::identity();
+        };
+        G2Affine {
+            x: self.x * zinv,
+            y: self.y * zinv,
+            infinity: Choice::from(0),
+        }
+    }
+
     /// Computes the doubling of this point.
     pub fn double(&self) -> G2Projective {
         // Algorithm 9, https://eprint.iacr.org/2015/1060.pdf
@@ -765,15 +777,18 @@ impl G2Projective {
         let z3 = t1 + t2;
         let t1 = t1 - t2;
         let y3 = mul_by_3b(y3);
-        let x3 = t4 * y3;
-        let t2 = t3 * t1;
-        let x3 = t2 - x3;
-        let y3 = y3 * t0;
-        let t1 = t1 * z3;
-        let y3 = t1 + y3;
-        let t0 = t0 * t3;
-        let z3 = z3 * t4;
-        let z3 = z3 + t0;
+        // Five-product cross-product tail (eprint 2026/2667, §2):
+        // A = t3, B = t1, C = t4, D = y3, E = t0, F = z3.
+        let s = z3 + y3;
+        let r = t1 - t4;
+        let m0 = s * r;
+        let m1 = z3 * t4;
+        let m2 = y3 * (t0 - r);
+        let m3 = (t3 - s) * t1;
+        let m4 = t3 * t0;
+        let x3 = m0 + m1 + m3;
+        let y3 = m0 + m1 + m2;
+        let z3 = m1 + m4;
 
         G2Projective {
             x: x3,
@@ -803,15 +818,18 @@ impl G2Projective {
         let z3 = t1 + t2;
         let t1 = t1 - t2;
         let y3 = mul_by_3b(y3);
-        let x3 = t4 * y3;
-        let t2 = t3 * t1;
-        let x3 = t2 - x3;
-        let y3 = y3 * t0;
-        let t1 = t1 * z3;
-        let y3 = t1 + y3;
-        let t0 = t0 * t3;
-        let z3 = z3 * t4;
-        let z3 = z3 + t0;
+        // Five-product cross-product tail (eprint 2026/2667, §2):
+        // A = t3, B = t1, C = t4, D = y3, E = t0, F = z3.
+        let s = z3 + y3;
+        let r = t1 - t4;
+        let m0 = s * r;
+        let m1 = z3 * t4;
+        let m2 = y3 * (t0 - r);
+        let m3 = (t3 - s) * t1;
+        let m4 = t3 * t0;
+        let x3 = m0 + m1 + m3;
+        let y3 = m0 + m1 + m2;
+        let z3 = m1 + m4;
 
         let tmp = G2Projective {
             x: x3,
@@ -822,23 +840,80 @@ impl G2Projective {
         G2Projective::conditional_select(&tmp, self, rhs.is_identity())
     }
 
-    fn multiply(&self, by: &[u8]) -> G2Projective {
+    /// Complete tripling through the degree-three isogenies to and from E_{-27b}.
+    /// See Section 3 of https://eprint.iacr.org/2026/2667.
+    fn triple(&self) -> G2Projective {
+        let y2 = self.y.square();
+        // B = 4(1 + u), so multiplication by B needs only additions.
+        let z2 = self.z.square();
+        let bz2 = Fp2 {
+            c0: z2.c0 - z2.c1,
+            c1: z2.c0 + z2.c1,
+        };
+        let bz2 = bz2 + bz2;
+        let bz2 = bz2 + bz2;
+        let v = y2 - bz2;
+        let b4z2 = bz2 + bz2;
+        let b4z2 = b4z2 + b4z2;
+        let x = self.x * (v + b4z2);
+        let y = self.y * (v - (b4z2 + b4z2));
+        let z = self.z * v;
+
+        let y2 = y.square();
+        let z2 = z.square();
+        let bz2 = Fp2 {
+            c0: z2.c0 - z2.c1,
+            c1: z2.c0 + z2.c1,
+        };
+        let bz2 = bz2 + bz2;
+        let bz2 = bz2 + bz2;
+        let b3z2 = bz2 + bz2 + bz2;
+        let b9z2 = b3z2 + b3z2 + b3z2;
+        let b27z2 = b9z2 + b9z2 + b9z2;
+        let w = y2 + b27z2;
+        let b108z2 = b27z2 + b27z2;
+        let b108z2 = b108z2 + b108z2;
+        let x = x * (w - b108z2);
+        let y = y * (w + b108z2 + b108z2);
+        let z = z * w;
+        let z = z + z + z;
+        let z = z + z + z;
+        G2Projective {
+            x: x + x + x,
+            y,
+            z: z + z + z,
+        }
+    }
+
+    fn multiply(&self, by: &[u8; 32]) -> G2Projective {
+        let digits = crate::scalar_mul::to_radix_3(by);
+
+        // A table of [j]P for j in 1..27, built with complete formulas: each step doubles
+        // an earlier entry and adds P to the result, which fills 2P to 25P; 26P is one more
+        // doubling. Digit 0 adds the identity, the initial addend.
+        let mut table = [*self; 26];
+        for idx in (1..25).step_by(2) {
+            // idx is odd, so idx >> 1 is the entry holding half of (idx + 1)P.
+            table[idx] = table[idx >> 1].double();
+            table[idx + 1] = table[idx] + self;
+        }
+        table[25] = table[12].double();
+
         let mut acc = G2Projective::identity();
 
-        // This is a simple double-and-add implementation of point
-        // multiplication, moving from most significant to least
-        // significant bit of the scalar.
-        //
-        // We skip the leading bit because it's always unset for Fq
-        // elements.
-        for bit in by
-            .iter()
-            .rev()
-            .flat_map(|byte| (0..8).rev().map(move |i| Choice::from((byte >> i) & 1u8)))
-            .skip(1)
-        {
-            acc = acc.double();
-            acc = G2Projective::conditional_select(&acc, &(acc + self), bit);
+        // Radix 27: three complete triplings and one complete addition per digit, which
+        // packs the trits 3i, 3i + 1 and 3i + 2; the recoding pads the 161 trits with a
+        // zero so that there are 54 whole digits.
+        for i in (0..54).rev() {
+            let t0 = digits[3 * i];
+            let t1 = digits[3 * i + 1];
+            let t2 = digits[3 * i + 2];
+            let d = t0 + 3 * t1 + 9 * t2;
+            let mut addend = G2Projective::identity();
+            for (j, entry) in table.iter().enumerate() {
+                addend = G2Projective::conditional_select(&addend, entry, d.ct_eq(&(j as u8 + 1)));
+            }
+            acc = acc.triple().triple().triple() + addend;
         }
 
         acc
@@ -1090,10 +1165,10 @@ impl PartialEq for G2Uncompressed {
 impl Group for G2Projective {
     type Scalar = Scalar;
 
-    fn random(mut rng: impl RngCore) -> Self {
+    fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
         loop {
-            let x = Fp2::random(&mut rng);
-            let flip_sign = rng.next_u32() % 2 != 0;
+            let x = Fp2::try_random(rng)?;
+            let flip_sign = rng.try_next_u32()? % 2 != 0;
 
             // Obtain the corresponding y-coordinate given x as y = sqrt(x^3 + 4)
             let p = ((x.square() * x) + B).sqrt().map(|y| G2Affine {
@@ -1106,7 +1181,7 @@ impl Group for G2Projective {
                 let p = p.unwrap().to_curve().clear_cofactor();
 
                 if bool::from(!p.is_identity()) {
-                    return p;
+                    return Ok(p);
                 }
             }
         }
@@ -1151,22 +1226,20 @@ impl WnafGroup for G2Projective {
 impl PrimeGroup for G2Projective {}
 
 impl Curve for G2Projective {
-    type AffineRepr = G2Affine;
+    type Affine = G2Affine;
 
-    fn batch_normalize(p: &[Self], q: &mut [Self::AffineRepr]) {
+    fn batch_normalize(p: &[Self], q: &mut [Self::Affine]) {
         Self::batch_normalize(p, q);
     }
 
-    fn to_affine(&self) -> Self::AffineRepr {
+    fn to_affine(&self) -> Self::Affine {
         self.into()
     }
 }
 
-impl PrimeCurve for G2Projective {
-    type Affine = G2Affine;
-}
+impl PrimeCurve for G2Projective {}
 
-impl PrimeCurveAffine for G2Affine {
+impl CurveAffine for G2Affine {
     type Scalar = Scalar;
     type Curve = G2Projective;
 
@@ -1261,10 +1334,10 @@ fn test_is_on_curve() {
         ]),
     };
 
-    let gen = G2Affine::generator();
+    let r#gen = G2Affine::generator();
     let mut test = G2Projective {
-        x: gen.x * z,
-        y: gen.y * z,
+        x: r#gen.x * z,
+        y: r#gen.y * z,
         z,
     };
 
@@ -1404,6 +1477,9 @@ fn test_projective_to_affine() {
     };
 
     assert_eq!(G2Affine::from(c), G2Affine::generator());
+    for point in [a, b, c] {
+        assert_eq!(point.to_affine_vartime(), G2Affine::from(point));
+    }
 }
 
 #[test]
@@ -2163,17 +2239,383 @@ fn test_commutative_scalar_subgroup_multiplication() {
     let g2_a = G2Affine::generator();
     let g2_p = G2Projective::generator();
 
-    // By reference.
-    assert_eq!(&g2_a * &a, &a * &g2_a);
-    assert_eq!(&g2_p * &a, &a * &g2_p);
+    // By reference. In subfunction to avoid "needlessly taken reference" lint.
+    fn by_ref(g2_a: &G2Affine, g2_p: &G2Projective, a: &Scalar) {
+        assert_eq!(g2_a * a, a * g2_a);
+        assert_eq!(g2_p * a, a * g2_p);
+    }
+    by_ref(&g2_a, &g2_p, &a);
 
     // Mixed
-    assert_eq!(&g2_a * a.clone(), a.clone() * &g2_a);
-    assert_eq!(&g2_p * a.clone(), a.clone() * &g2_p);
-    assert_eq!(g2_a.clone() * &a, &a * g2_a.clone());
-    assert_eq!(g2_p.clone() * &a, &a * g2_p.clone());
+    fn group_ref(g2_a: &G2Affine, g2_p: &G2Projective, a: Scalar) {
+        assert_eq!(g2_a * a, a * g2_a);
+        assert_eq!(g2_p * a, a * g2_p);
+    }
+    fn scalar_ref(g2_a: G2Affine, g2_p: G2Projective, a: &Scalar) {
+        assert_eq!(g2_a * a, a * g2_a);
+        assert_eq!(g2_p * a, a * g2_p);
+    }
+    group_ref(&g2_a, &g2_p, a);
+    scalar_ref(g2_a, g2_p, &a);
 
     // By value.
     assert_eq!(g2_p * a, a * g2_p);
     assert_eq!(g2_a * a, a * g2_a);
+}
+
+// Test-only reference implementations with the original six-product tails.
+#[test]
+fn test_five_product_addition_against_six_product() {
+    fn old_add(a: &G2Projective, b: &G2Projective) -> G2Projective {
+        let t0 = a.x * b.x;
+        let t1 = a.y * b.y;
+        let t2 = a.z * b.z;
+        let t3 = (a.x + a.y) * (b.x + b.y) - (t0 + t1);
+        let t4 = (a.y + a.z) * (b.y + b.z) - (t1 + t2);
+        let y3 = (a.x + a.z) * (b.x + b.z) - (t0 + t2);
+        let t0 = t0 + t0 + t0;
+        let t2 = mul_by_3b(t2);
+        let z3 = t1 + t2;
+        let t1 = t1 - t2;
+        let y3 = mul_by_3b(y3);
+        G2Projective {
+            x: t3 * t1 - t4 * y3,
+            y: y3 * t0 + t1 * z3,
+            z: z3 * t4 + t0 * t3,
+        }
+    }
+
+    fn old_add_mixed(a: &G2Projective, b: &G2Affine) -> G2Projective {
+        let t0 = a.x * b.x;
+        let t1 = a.y * b.y;
+        let t3 = (b.x + b.y) * (a.x + a.y) - (t0 + t1);
+        let t4 = b.y * a.z + a.y;
+        let y3 = b.x * a.z + a.x;
+        let t0 = t0 + t0 + t0;
+        let t2 = mul_by_3b(a.z);
+        let z3 = t1 + t2;
+        let t1 = t1 - t2;
+        let y3 = mul_by_3b(y3);
+        let tmp = G2Projective {
+            x: t3 * t1 - t4 * y3,
+            y: y3 * t0 + t1 * z3,
+            z: z3 * t4 + t0 * t3,
+        };
+        G2Projective::conditional_select(&tmp, a, b.is_identity())
+    }
+
+    fn scale(p: G2Projective, z: Fp2) -> G2Projective {
+        G2Projective {
+            x: p.x * z,
+            y: p.y * z,
+            z: p.z * z,
+        }
+    }
+
+    let generator = G2Projective::generator();
+    let twice = generator.double();
+    // Existing on-curve fixture from test_is_torsion_free, outside the prime-order subgroup.
+    let non_subgroup = G2Affine {
+        x: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x89f5_50c8_13db_6431,
+                0xa50b_e8c4_56cd_8a1a,
+                0xa45b_3741_14ca_e851,
+                0xbb61_90f5_bf7f_ff63,
+                0x970c_a02c_3ba8_0bc7,
+                0x02b8_5d24_e840_fbac,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x6888_bc53_d707_16dc,
+                0x3dea_6b41_1768_2d70,
+                0xd8f5_f930_500c_a354,
+                0x6b5e_cb65_56f5_c155,
+                0xc96b_ef04_3477_8ab0,
+                0x0508_1505_5150_06ad,
+            ]),
+        },
+        y: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x3cf1_ea0d_434b_0f40,
+                0x1a0d_c610_e603_e333,
+                0x7f89_9561_60c7_2fa0,
+                0x25ee_03de_cf64_31c5,
+                0xeee8_e206_ec0f_e137,
+                0x0975_92b2_26df_ef28,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x71e8_bb5f_2924_7367,
+                0xa5fe_049e_2118_31ce,
+                0x0ce6_b354_502a_3896,
+                0x93b0_1200_0997_314e,
+                0x6759_f3b6_aa5b_42ac,
+                0x1569_44c4_dfe9_2bbb,
+            ]),
+        },
+        infinity: Choice::from(0u8),
+    };
+    assert!(bool::from(non_subgroup.is_on_curve()));
+    assert!(!bool::from(non_subgroup.is_torsion_free()));
+    let outsider = G2Projective::from(non_subgroup);
+    let z = Fp2 {
+        c0: Fp::one() + Fp::one(),
+        c1: Fp::one(),
+    };
+    let points = [
+        G2Projective::identity(),
+        generator,
+        -generator,
+        twice,
+        scale(generator, z),
+        scale(twice, z + Fp2::one()),
+        outsider,
+        scale(outsider, z),
+    ];
+    for (i, a) in points.iter().enumerate() {
+        assert!(bool::from(a.is_on_curve()));
+        for (j, b) in points.iter().enumerate() {
+            let expected = old_add(a, b);
+            let actual = a.add(b);
+            assert_eq!(
+                (actual.x, actual.y, actual.z),
+                (expected.x, expected.y, expected.z),
+                "full {i}, {j}"
+            );
+            assert!(bool::from(actual.is_on_curve()), "full {i}, {j}");
+        }
+        for (j, b) in [
+            G2Affine::identity(),
+            G2Affine::generator(),
+            -G2Affine::generator(),
+            G2Affine::from(twice),
+            non_subgroup,
+        ]
+        .iter()
+        .enumerate()
+        {
+            let expected = old_add_mixed(a, b);
+            let actual = a.add_mixed(b);
+            assert_eq!(
+                (actual.x, actual.y, actual.z),
+                (expected.x, expected.y, expected.z),
+                "mixed {i}, {j}"
+            );
+            assert!(bool::from(actual.is_on_curve()), "mixed {i}, {j}");
+        }
+    }
+}
+
+#[test]
+fn test_triple_against_double_and_add_on_curve_g2() {
+    fn check(p: G2Projective) {
+        assert!(bool::from(p.is_on_curve()));
+        let actual = p.triple();
+        let expected = p.double() + p;
+        assert_eq!(actual, expected);
+        assert!(bool::from(actual.is_on_curve()));
+        if bool::from(expected.is_identity()) {
+            assert!(bool::from(actual.is_identity()));
+            assert!(!bool::from(actual.y.is_zero()));
+        } else {
+            assert!(!bool::from(actual.z.is_zero()));
+            assert!(!bool::from(actual.x.is_zero()) || !bool::from(actual.y.is_zero()));
+        }
+    }
+    fn scale(p: G2Projective, factor: Fp2) -> G2Projective {
+        G2Projective {
+            x: p.x * factor,
+            y: p.y * factor,
+            z: p.z * factor,
+        }
+    }
+    let generator = G2Projective::generator();
+    let non_subgroup = G2Projective::from(G2Affine {
+        x: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x89f5_50c8_13db_6431,
+                0xa50b_e8c4_56cd_8a1a,
+                0xa45b_3741_14ca_e851,
+                0xbb61_90f5_bf7f_ff63,
+                0x970c_a02c_3ba8_0bc7,
+                0x02b8_5d24_e840_fbac,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x6888_bc53_d707_16dc,
+                0x3dea_6b41_1768_2d70,
+                0xd8f5_f930_500c_a354,
+                0x6b5e_cb65_56f5_c155,
+                0xc96b_ef04_3477_8ab0,
+                0x0508_1505_5150_06ad,
+            ]),
+        },
+        y: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x3cf1_ea0d_434b_0f40,
+                0x1a0d_c610_e603_e333,
+                0x7f89_9561_60c7_2fa0,
+                0x25ee_03de_cf64_31c5,
+                0xeee8_e206_ec0f_e137,
+                0x0975_92b2_26df_ef28,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x71e8_bb5f_2924_7367,
+                0xa5fe_049e_2118_31ce,
+                0x0ce6_b354_502a_3896,
+                0x93b0_1200_0997_314e,
+                0x6759_f3b6_aa5b_42ac,
+                0x1569_44c4_dfe9_2bbb,
+            ]),
+        },
+        infinity: Choice::from(0u8),
+    });
+    assert!(!bool::from(G2Affine::from(non_subgroup).is_torsion_free()));
+    let factor = Fp2 {
+        c0: Fp::one() + Fp::one(),
+        c1: Fp::one(),
+    };
+    for p in [
+        G2Projective::identity(),
+        generator,
+        -generator,
+        generator.double(),
+        scale(generator, factor),
+        scale(-generator, factor),
+        non_subgroup,
+        -non_subgroup,
+        scale(non_subgroup, factor),
+    ] {
+        check(p);
+    }
+    assert_ne!(generator.triple(), -generator.double() - generator);
+
+    let mut found = 0;
+    let mut x0 = Fp::zero();
+    let mut x1 = Fp::one();
+    for _ in 0..100 {
+        let x = Fp2 { c0: x0, c1: x1 };
+        let y = (x.square() * x + B).sqrt();
+        if bool::from(y.is_some()) {
+            let p = G2Projective {
+                x,
+                y: y.unwrap(),
+                z: Fp2::one(),
+            };
+            check(p);
+            check(-p);
+            check(scale(p, factor));
+            found += 1;
+        }
+        x0 += Fp::one();
+        x1 += Fp::one() + Fp::one();
+    }
+    assert!(found >= 20);
+}
+
+#[test]
+fn test_radix_three_scalar_multiply_against_binary_g2() {
+    fn binary(p: G2Projective, by: &[u8; 32]) -> G2Projective {
+        let mut acc = G2Projective::identity();
+        for bit in by
+            .iter()
+            .rev()
+            .flat_map(|byte| (0..8).rev().map(move |i| (byte >> i) & 1))
+            .skip(1)
+        {
+            acc = acc.double();
+            if bit == 1 {
+                acc += p;
+            }
+        }
+        acc
+    }
+    let generator = G2Projective::generator();
+    let non_subgroup = G2Projective::from(G2Affine {
+        x: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x89f5_50c8_13db_6431,
+                0xa50b_e8c4_56cd_8a1a,
+                0xa45b_3741_14ca_e851,
+                0xbb61_90f5_bf7f_ff63,
+                0x970c_a02c_3ba8_0bc7,
+                0x02b8_5d24_e840_fbac,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x6888_bc53_d707_16dc,
+                0x3dea_6b41_1768_2d70,
+                0xd8f5_f930_500c_a354,
+                0x6b5e_cb65_56f5_c155,
+                0xc96b_ef04_3477_8ab0,
+                0x0508_1505_5150_06ad,
+            ]),
+        },
+        y: Fp2 {
+            c0: Fp::from_raw_unchecked([
+                0x3cf1_ea0d_434b_0f40,
+                0x1a0d_c610_e603_e333,
+                0x7f89_9561_60c7_2fa0,
+                0x25ee_03de_cf64_31c5,
+                0xeee8_e206_ec0f_e137,
+                0x0975_92b2_26df_ef28,
+            ]),
+            c1: Fp::from_raw_unchecked([
+                0x71e8_bb5f_2924_7367,
+                0xa5fe_049e_2118_31ce,
+                0x0ce6_b354_502a_3896,
+                0x93b0_1200_0997_314e,
+                0x6759_f3b6_aa5b_42ac,
+                0x1569_44c4_dfe9_2bbb,
+            ]),
+        },
+        infinity: Choice::from(0u8),
+    });
+    let factor = Fp2 {
+        c0: Fp::one() + Fp::one(),
+        c1: Fp::one(),
+    };
+    let scale = |p: G2Projective| G2Projective {
+        x: p.x * factor,
+        y: p.y * factor,
+        z: p.z * factor,
+    };
+    let points = [
+        G2Projective::identity(),
+        generator,
+        -generator,
+        scale(generator),
+        non_subgroup,
+        -non_subgroup,
+        scale(non_subgroup),
+    ];
+    let mut scalars = [[0u8; 32]; 28];
+    for (index, value) in [0u64, 1, 2, 3, 4, 8, 9, 26, 27, 80, 81, 255, 256, 257]
+        .iter()
+        .enumerate()
+    {
+        scalars[index][..8].copy_from_slice(&value.to_le_bytes());
+    }
+    scalars[14] = [0xff; 32];
+    scalars[15] = [0xff; 32];
+    scalars[15][31] = 0x7f;
+    scalars[16][31] = 0x80;
+    scalars[17] = [0x55; 32];
+    scalars[18] = [0xaa; 32];
+    let mut state = 0xd1b5_4a32_d192_ed03u64;
+    for bytes in &mut scalars[19..] {
+        for chunk in bytes.chunks_exact_mut(8) {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            chunk.copy_from_slice(&state.to_le_bytes());
+        }
+    }
+    for (point_index, p) in points.iter().enumerate() {
+        assert!(bool::from(p.is_on_curve()), "point {point_index}");
+        for (scalar_index, by) in scalars.iter().enumerate() {
+            assert_eq!(
+                p.multiply(by),
+                binary(*p, by),
+                "point {point_index}, scalar {scalar_index}"
+            );
+        }
+    }
 }

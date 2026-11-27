@@ -1,5 +1,44 @@
 # Unreleased
 
+## Changed
+- Based on bls12_381 0.9.2 (see the upstream release notes for 0.9.0, 0.9.1
+  and 0.9.2 below). This includes breaking changes, notably:
+  - MSRV is now 1.85.0, and the crate uses the 2024 edition.
+  - Bumped dependencies to `ff 0.14`, `group 0.14`, `pairing 0.24.2` and
+    `rand_core 0.10`. For example, `Field::random` and `Group::random` now
+    take `&mut R` with `R: rand_core::Rng`, `group::Curve::AffineRepr` is now
+    `Curve::Affine`, and the `PrimeCurveAffine` methods moved to
+    `group::CurveAffine`.
+  - `experimental`: Hashing to curves now follows Internet Draft v16 (hash
+    outputs are unchanged), and its API has changed:
+    `HashToCurve::{hash_to_curve, encode_to_curve}` and
+    `HashToField::hash_to_field` take a `Message`, such as `[msg]`, instead of
+    `impl AsRef<[u8]>` or `&[u8]`; `ExpandMessageState` and
+    `InitExpandMessage` were merged into `ExpandMessage`; and `HashToField`
+    has a new `XofOutputLength` associated type.
+  - `experimental` now enables `groups`.
+  - New `sqrt-table` feature flag, enabled by default (requires `alloc`). It
+    speeds up `Scalar` square roots with precomputed tables whose memory
+    accesses depend on the input. It needs atomic compare-and-swap, so
+    thumbv6m-none-eabi builds need `default-features = false`.
+- Avoid a variable-time division of secret scalar digits in upstream's new
+  radix-3 scalar recoding (used by `G1Projective`/`G2Projective` scalar
+  multiplication) on targets without native 64-bit division, such as
+  thumbv6m-none-eabi and wasm32.
+- On 32-bit ARM targets (e.g. Ledger devices), `Fp`/`Fp2` inversion, square
+  roots and hashing to curves use square-and-multiply instead of upstream's new
+  addition chains, which need several KiB of additional stack.
+- `experimental`: Bumped `digest` to 0.11, so hashing to curves needs
+  `digest` 0.11 hash functions (e.g. `sha2` 0.11, or `shake` for SHAKE128 and
+  SHAKE256, which moved out of `sha3` in 0.12). `HashToField::from_okm` now
+  takes a `hybrid-array` `Array` (`digest::array::Array`) instead of a
+  `GenericArray`, and `ArraySize` replaces `ArrayLength<u8>` in the trait
+  bounds. Hash outputs are unchanged.
+- Removed the wasm32 workaround for slow compilation from ic_bls12_381 0.10.1.
+  Upstream's new addition chain for hashing to G2 compiles quickly with recent
+  Rust toolchains (e.g. 1.100.0), and is about 12% faster than the
+  square-and-multiply fallback on wasm32.
+
 # ic_bls12_381 0.10.1
 ## Changed
 - Work around an LLVM bug which caused very slow compilation when
@@ -29,6 +68,37 @@
 - Based on bls12_381 0.7
 - Support serialization of Gt elements
 - Add zeroize support for Gt
+
+# 0.9.2
+## Changed
+- Raised `pairing` minimum version to `0.24.2`, to provide a more efficient
+  implementation of `pairing::MillerLoopResult::final_exponentiation_vartime`.
+- Improved performance.
+
+## Fixed
+- The `groups` feature flag was broken by 0.9.1; it now works again without the
+  `pairings` feature flag.
+
+# 0.9.1
+## Added
+- `sqrt-table` feature flag (enabled by default), which enables large
+  precomputed tables (stored on the heap) that speed up square root
+  computation.
+- `bls12_381::G1Projective::to_affine_vartime`
+- `bls12_381::G2Projective::to_affine_vartime`
+
+## Changed
+- Raised `pairing` minimum version to `0.24.1`, to provide a more efficient
+  implementation of `pairing::MultiMillerLoop::prepare_reusable_g2`.
+- Improved performance.
+
+# 0.9.0
+## Changed
+- MSRV is now 1.85.0.
+- Bumped dependencies to `digest 0.10`, `ff 0.14`, `group 0.14`, `pairing 0.24`,
+  `rand_core 0.10`.
+- `experimental`: Migrated to Hashing to curves
+  ([Internet Draft v16](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16)).
 
 # 0.8.0
 ## Changed

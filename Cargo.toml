@@ -1,27 +1,67 @@
 [package]
+name = "ic_bls12_381"
+version = "0.10.1"
 authors = [
     "Sean Bowe <ewillbefull@gmail.com>",
     "Jack Grigg <thestr4d@gmail.com>",
 ]
+edition = "2024"
+rust-version = "1.85"
 description = "Implementation of the BLS12-381 pairing-friendly elliptic curve construction"
 documentation = "https://docs.rs/ic_bls12_381/"
 homepage = "https://github.com/dfinity/bls12_381"
-license = "MIT/Apache-2.0"
-name = "ic_bls12_381"
 repository = "https://github.com/dfinity/bls12_381"
-version = "0.10.1"
-edition = "2021"
+license = "MIT/Apache-2.0"
 
 [package.metadata.docs.rs]
-rustdoc-args = [ "--html-in-header", "katex-header.html" ]
+rustdoc-args = ["--html-in-header", "katex-header.html"]
+
+[dependencies]
+digest = { version = "0.11", optional = true }
+ff = { version = "0.14", default-features = false }
+group = { version = "0.14", optional = true, default-features = false }
+once_cell = { version = "1", optional = true, default-features = false, features = [
+    "alloc",
+    "race",
+] }
+pairing = { version = "0.24.2", optional = true }
+rand_core = { version = "0.10", default-features = false }
+subtle = { version = "2.2.1", default-features = false }
+zeroize = { version = "1.4", optional = true, default-features = false }
 
 [dev-dependencies]
-csv = ">= 1.0, < 1.2" # csv 1.2 has MSRV 1.60
-criterion = "0.3"
 hex = "0.4"
-rand_xorshift = "0.3"
-sha2 = "0.10"
-sha3 = "0.10"
+hex-literal = "1.1"
+rand_xorshift = "0.5"
+sha2 = "0.11.2"
+shake = "0.1"
+
+# criterion's default rayon feature does not build for wasm targets, where the
+# benchmarks don't run anyway.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+criterion = "0.8"
+
+[features]
+default = ["groups", "pairings", "alloc", "bits", "sqrt-table"]
+bits = ["ff/bits"]
+groups = ["group"]
+pairings = ["groups", "pairing"]
+alloc = ["group/alloc"]
+experimental = ["digest", "groups"]
+nightly = ["subtle/nightly"]
+sqrt-table = ["alloc", "once_cell"]
+
+[[test]]
+name = "expand_msg"
+required-features = ["alloc", "experimental"]
+
+[[test]]
+name = "hash_to_curve_g1"
+required-features = ["experimental"]
+
+[[test]]
+name = "hash_to_curve_g2"
+required-features = ["experimental"]
 
 [[bench]]
 name = "groups"
@@ -32,42 +72,3 @@ required-features = ["groups"]
 name = "hash_to_curve"
 harness = false
 required-features = ["experimental"]
-
-[dependencies.digest]
-version = "0.10"
-optional = true
-
-[dependencies.ff]
-version = "0.13"
-default-features = false
-
-[dependencies.group]
-version = "0.13"
-default-features = false
-optional = true
-
-[dependencies.pairing]
-version = "0.23"
-optional = true
-
-[dependencies.rand_core]
-version = "0.6"
-default-features = false
-
-[dependencies.subtle]
-version = "2.2.1"
-default-features = false
-
-[dependencies.zeroize]
-version = "1.4"
-default-features = false
-optional = true
-
-[features]
-default = ["groups", "pairings", "alloc", "bits"]
-bits = ["ff/bits"]
-groups = ["group"]
-pairings = ["groups", "pairing"]
-alloc = ["group/alloc"]
-experimental = ["digest"]
-nightly = ["subtle/nightly"]

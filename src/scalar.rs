@@ -3,7 +3,7 @@
 
 use core::fmt;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
-use rand_core::RngCore;
+use rand_core::TryRng;
 
 use ff::{Field, PrimeField};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
@@ -12,6 +12,13 @@ use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 use ff::{FieldBits, PrimeFieldBits};
 
 use crate::util::{adc, mac, sbb};
+
+#[cfg(feature = "sqrt-table")]
+use {
+    crate::sqrt_table::{SqrtTableHelpers, SqrtTables},
+    alloc::boxed::Box,
+    once_cell::race::OnceBox,
+};
 
 /// Represents an element of the scalar field $\mathbb{F}_q$ of the BLS12-381 elliptic
 /// curve construction.
@@ -104,7 +111,7 @@ const GENERATOR: Scalar = Scalar([
     0x3513_3220_8fc5_a8c4,
 ]);
 
-impl<'a> Neg for &'a Scalar {
+impl Neg for &Scalar {
     type Output = Scalar;
 
     #[inline]
@@ -122,7 +129,7 @@ impl Neg for Scalar {
     }
 }
 
-impl<'a, 'b> Sub<&'b Scalar> for &'a Scalar {
+impl<'b> Sub<&'b Scalar> for &Scalar {
     type Output = Scalar;
 
     #[inline]
@@ -131,7 +138,7 @@ impl<'a, 'b> Sub<&'b Scalar> for &'a Scalar {
     }
 }
 
-impl<'a, 'b> Add<&'b Scalar> for &'a Scalar {
+impl<'b> Add<&'b Scalar> for &Scalar {
     type Output = Scalar;
 
     #[inline]
@@ -140,7 +147,7 @@ impl<'a, 'b> Add<&'b Scalar> for &'a Scalar {
     }
 }
 
-impl<'a, 'b> Mul<&'b Scalar> for &'a Scalar {
+impl<'b> Mul<&'b Scalar> for &Scalar {
     type Output = Scalar;
 
     #[inline]
@@ -211,6 +218,19 @@ const ROOT_OF_UNITY_INV: Scalar = Scalar([
     0xf9c3_f1d7_5f7a_3b27,
     0x2d2f_c049_658a_fd43,
 ]);
+
+/// `(t - 1) // 2` where t * 2^s + 1 = q with t odd.
+/// = 6104339283789297388802252303364915521546564123189034618274734669823
+///
+/// With `sqrt-table`, `pow_by_t_minus1_over2` uses an addition chain for this exponent, and the
+/// constant remains as the reference of its test.
+#[cfg(any(test, not(feature = "sqrt-table")))]
+pub(crate) const T_MINUS1_OVER2: [u64; 4] = [
+    0x7fff_2dff_7fff_ffff,
+    0x04d0_ec02_a9de_d201,
+    0x94ce_bea4_199c_ec04,
+    0x0000_0000_39f6_d3a9,
+];
 
 /// GENERATOR^{2^s} where t * 2^s + 1 = q with t odd.
 /// In other words, this is a t root of unity.
@@ -333,7 +353,7 @@ impl Scalar {
     /// Converts from an integer represented in little endian
     /// into its (congruent) `Scalar` representation.
     pub const fn from_raw(val: [u64; 4]) -> Self {
-        (&Scalar(val)).mul(&R2)
+        Self::mul(&Scalar(val), &R2)
     }
 
     /// Squares this element.
@@ -406,100 +426,10 @@ impl Scalar {
     /// Computes the multiplicative inverse of this element,
     /// failing if the element is zero.
     pub fn invert(&self) -> CtOption<Self> {
-        #[inline(always)]
-        fn square_assign_multi(n: &mut Scalar, num_times: usize) {
-            for _ in 0..num_times {
-                *n = n.square();
-            }
-        }
-        // found using https://github.com/kwantam/addchain
-        let mut t0 = self.square();
-        let mut t1 = t0 * self;
-        let mut t16 = t0.square();
-        let mut t6 = t16.square();
-        let mut t5 = t6 * t0;
-        t0 = t6 * t16;
-        let mut t12 = t5 * t16;
-        let mut t2 = t6.square();
-        let mut t7 = t5 * t6;
-        let mut t15 = t0 * t5;
-        let mut t17 = t12.square();
-        t1 *= t17;
-        let mut t3 = t7 * t2;
-        let t8 = t1 * t17;
-        let t4 = t8 * t2;
-        let t9 = t8 * t7;
-        t7 = t4 * t5;
-        let t11 = t4 * t17;
-        t5 = t9 * t17;
-        let t14 = t7 * t15;
-        let t13 = t11 * t12;
-        t12 = t11 * t17;
-        t15 *= &t12;
-        t16 *= &t15;
-        t3 *= &t16;
-        t17 *= &t3;
-        t0 *= &t17;
-        t6 *= &t0;
-        t2 *= &t6;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t17;
-        square_assign_multi(&mut t0, 9);
-        t0 *= &t16;
-        square_assign_multi(&mut t0, 9);
-        t0 *= &t15;
-        square_assign_multi(&mut t0, 9);
-        t0 *= &t15;
-        square_assign_multi(&mut t0, 7);
-        t0 *= &t14;
-        square_assign_multi(&mut t0, 7);
-        t0 *= &t13;
-        square_assign_multi(&mut t0, 10);
-        t0 *= &t12;
-        square_assign_multi(&mut t0, 9);
-        t0 *= &t11;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t8;
-        square_assign_multi(&mut t0, 8);
-        t0 *= self;
-        square_assign_multi(&mut t0, 14);
-        t0 *= &t9;
-        square_assign_multi(&mut t0, 10);
-        t0 *= &t8;
-        square_assign_multi(&mut t0, 15);
-        t0 *= &t7;
-        square_assign_multi(&mut t0, 10);
-        t0 *= &t6;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t5;
-        square_assign_multi(&mut t0, 16);
-        t0 *= &t3;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 7);
-        t0 *= &t4;
-        square_assign_multi(&mut t0, 9);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t3;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t3;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 8);
-        t0 *= &t2;
-        square_assign_multi(&mut t0, 5);
-        t0 *= &t1;
-        square_assign_multi(&mut t0, 5);
-        t0 *= &t1;
-
-        CtOption::new(t0, !self.ct_eq(&Self::zero()))
+        CtOption::new(
+            crate::chains::scalar::pow_by_q_minus2(self),
+            !self.ct_eq(&Self::zero()),
+        )
     }
 
     #[inline(always)]
@@ -546,7 +476,7 @@ impl Scalar {
         let (r7, _) = adc(r7, carry2, carry);
 
         // Result may be within MODULUS of the correct value
-        (&Scalar([r4, r5, r6, r7])).sub(&MODULUS)
+        Self::sub(&Scalar([r4, r5, r6, r7]), &MODULUS)
     }
 
     /// Multiplies `rhs` by `self`, returning the result.
@@ -605,7 +535,7 @@ impl Scalar {
 
         // Attempt to subtract the modulus, to ensure the value
         // is smaller than the modulus.
-        (&Scalar([d0, d1, d2, d3])).sub(&MODULUS)
+        Self::sub(&Scalar([d0, d1, d2, d3]), &MODULUS)
     }
 
     /// Negates `self`.
@@ -643,10 +573,10 @@ impl Field for Scalar {
     const ZERO: Self = Self::zero();
     const ONE: Self = Self::one();
 
-    fn random(mut rng: impl RngCore) -> Self {
+    fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
         let mut buf = [0; 64];
-        rng.fill_bytes(&mut buf);
-        Self::from_bytes_wide(&buf)
+        rng.try_fill_bytes(&mut buf)?;
+        Ok(Self::from_bytes_wide(&buf))
     }
 
     #[must_use]
@@ -664,24 +594,61 @@ impl Field for Scalar {
     }
 
     fn sqrt_ratio(num: &Self, div: &Self) -> (Choice, Self) {
+        #[cfg(feature = "sqrt-table")]
+        {
+            scalar_tables().sqrt_ratio(num, div)
+        }
+
+        #[cfg(not(feature = "sqrt-table"))]
         ff::helpers::sqrt_ratio_generic(num, div)
     }
 
+    #[cfg(feature = "sqrt-table")]
+    fn sqrt_alt(&self) -> (Choice, Self) {
+        scalar_tables().sqrt_alt(self)
+    }
+
+    /// Computes the square root of this element, if it exists.
     fn sqrt(&self) -> CtOption<Self> {
-        // (t - 1) // 2 = 6104339283789297388802252303364915521546564123189034618274734669823
-        ff::helpers::sqrt_tonelli_shanks(
-            self,
-            &[
-                0x7fff_2dff_7fff_ffff,
-                0x04d0_ec02_a9de_d201,
-                0x94ce_bea4_199c_ec04,
-                0x0000_0000_39f6_d3a9,
-            ],
-        )
+        #[cfg(feature = "sqrt-table")]
+        {
+            let (is_square, res) = scalar_tables().sqrt_alt(self);
+            CtOption::new(res, is_square)
+        }
+
+        #[cfg(not(feature = "sqrt-table"))]
+        ff::helpers::sqrt_tonelli_shanks(self, T_MINUS1_OVER2)
     }
 
     fn is_zero_vartime(&self) -> bool {
         self.0 == Self::zero().0
+    }
+}
+
+/// The perfect hash parameter was found by searching the normalized Montgomery
+/// representations of the order-256 subgroup (`sqrt_table_hash_search/`): 0x60FF5F7B
+/// is the first odd multiplier that is injective on all keys at SQRT_HASH_BITS = 10.
+/// Construction and `scalar_sqrt_table_hash_is_perfect` exhaustively check its safety
+/// invariant.
+#[cfg(feature = "sqrt-table")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sqrt-table")))]
+fn scalar_tables() -> &'static SqrtTables<Scalar> {
+    static SCALAR_TABLES: OnceBox<SqrtTables<Scalar>> = OnceBox::new();
+
+    SCALAR_TABLES.get_or_init(|| Box::new(SqrtTables::new(0x60ff_5f7b)))
+}
+
+#[cfg(feature = "sqrt-table")]
+impl SqrtTableHelpers for Scalar {
+    fn pow_by_t_minus1_over2(&self) -> Self {
+        crate::chains::scalar::pow_by_t_minus1_over2(self)
+    }
+
+    fn sqrt_hash_key(&self) -> u32 {
+        // The key is the low 32 bits of the Montgomery form. The low 32 bits of the
+        // canonical form are not unique on this subgroup: since q = 1 mod 2^32, 1 and -1
+        // (and the two primitive 4th roots of unity) share them.
+        self.0[0] as u32
     }
 }
 
@@ -830,7 +797,7 @@ fn test_inv() {
     assert_eq!(inv, INV);
 }
 
-#[cfg(feature = "std")]
+#[cfg(feature = "alloc")]
 #[test]
 fn test_debug() {
     assert_eq!(
@@ -851,7 +818,10 @@ fn test_debug() {
 fn test_equality() {
     assert_eq!(Scalar::zero(), Scalar::zero());
     assert_eq!(Scalar::one(), Scalar::one());
-    assert_eq!(R2, R2);
+    #[allow(clippy::eq_op)]
+    {
+        assert_eq!(R2, R2);
+    }
 
     assert!(Scalar::zero() != Scalar::one());
     assert!(Scalar::one() != R2);
@@ -995,7 +965,9 @@ fn test_from_u512_max() {
     let max_u64 = 0xffff_ffff_ffff_ffff;
     assert_eq!(
         R3 - R,
-        Scalar::from_u512([max_u64, max_u64, max_u64, max_u64, max_u64, max_u64, max_u64, max_u64])
+        Scalar::from_u512([
+            max_u64, max_u64, max_u64, max_u64, max_u64, max_u64, max_u64, max_u64
+        ])
     );
 }
 
@@ -1274,4 +1246,124 @@ fn test_zeroize() {
     ]);
     a.zeroize();
     assert!(bool::from(a.is_zero()));
+}
+
+#[cfg(all(test, feature = "sqrt-table"))]
+fn sqrt_test_scalar(s: &mut u64) -> Scalar {
+    // Deterministic xorshift input for the square-root tests.
+    let mut b = [0u8; 64];
+    for c in b.chunks_mut(8) {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        c.copy_from_slice(&s.to_le_bytes());
+    }
+    Scalar::from_bytes_wide(&b)
+}
+
+#[cfg(feature = "sqrt-table")]
+#[test]
+fn scalar_sqrt_table_hash_is_perfect() {
+    scalar_tables().assert_hash_table_is_consistent();
+}
+
+#[cfg(feature = "sqrt-table")]
+#[test]
+fn scalar_sqrt_table_matches_tonelli_shanks() {
+    fn check(input: Scalar) {
+        let table = input.sqrt();
+        let reference = ff::helpers::sqrt_tonelli_shanks(&input, T_MINUS1_OVER2);
+
+        assert_eq!(table.is_some().unwrap_u8(), reference.is_some().unwrap_u8());
+        if bool::from(table.is_some()) {
+            let table = table.unwrap();
+            let reference = reference.unwrap();
+            assert!(table == reference || table == -reference);
+            assert_eq!(table.square(), input);
+        }
+    }
+
+    let mut rng = 0x9e37_79b9_7f4a_7c15u64;
+    for _ in 0..100_000 {
+        let x = sqrt_test_scalar(&mut rng);
+        // Random input, its square, and a non-square (GENERATOR is a non-residue).
+        check(x);
+        check(x.square());
+        check(x.square() * GENERATOR);
+    }
+
+    check(Scalar::zero());
+    check(Scalar::one());
+    check(-Scalar::one());
+
+    // ROOT_OF_UNITY^(2^i) for i = 0..=S, and every element of the order-256 subgroup
+    // that the inverse table is built from (times a random square and non-square).
+    let mut g = ROOT_OF_UNITY;
+    for _ in 0..=Scalar::S {
+        check(g);
+        g = g.square();
+    }
+    assert_eq!(g, Scalar::one());
+    let g3 = (0..24).fold(ROOT_OF_UNITY, |g, _| g.square());
+    let mut h = Scalar::one();
+    let r = sqrt_test_scalar(&mut rng).square();
+    for _ in 0..256 {
+        check(h);
+        check(h * r);
+        h *= g3;
+    }
+}
+
+#[cfg(feature = "sqrt-table")]
+#[test]
+fn test_pow_by_t_minus1_over2() {
+    // NB: TWO_INV is standing in as a "random" field element
+    let v = (Scalar::TWO_INV).pow_by_t_minus1_over2();
+    assert!(v == ff::Field::pow_vartime(&Scalar::TWO_INV, T_MINUS1_OVER2));
+}
+
+#[test]
+fn test_sqrt_ratio_and_alt() {
+    // (true, sqrt(num/div)), if num and div are nonzero and num/div is a square in the field
+    let num = Field::square(&Scalar::TWO_INV);
+    let div = Scalar::from(25);
+    let div_inverse = div.invert().unwrap();
+    let expected = Scalar::TWO_INV * Scalar::from(5).invert().unwrap();
+    let (is_square, v) = Scalar::sqrt_ratio(&num, &div);
+    assert!(bool::from(is_square));
+    assert!(v == expected || (-v) == expected);
+
+    let (is_square_alt, v_alt) = Scalar::sqrt_alt(&(num * div_inverse));
+    assert!(bool::from(is_square_alt));
+    assert!(v_alt == v);
+
+    // (false, sqrt(ROOT_OF_UNITY * num/div)), if num and div are nonzero and num/div is a nonsquare in the field
+    let num = num * Scalar::ROOT_OF_UNITY;
+    let expected = Scalar::TWO_INV * Scalar::ROOT_OF_UNITY * Scalar::from(5).invert().unwrap();
+    let (is_square, v) = Scalar::sqrt_ratio(&num, &div);
+    assert!(!bool::from(is_square));
+    assert!(v == expected || (-v) == expected);
+
+    let (is_square_alt, v_alt) = Scalar::sqrt_alt(&(num * div_inverse));
+    assert!(!bool::from(is_square_alt));
+    assert!(v_alt == v);
+
+    // (true, 0), if num is zero
+    let num = Scalar::zero();
+    let expected = Scalar::zero();
+    let (is_square, v) = Scalar::sqrt_ratio(&num, &div);
+    assert!(bool::from(is_square));
+    assert!(v == expected);
+
+    let (is_square_alt, v_alt) = Scalar::sqrt_alt(&(num * div_inverse));
+    assert!(bool::from(is_square_alt));
+    assert!(v_alt == v);
+
+    // (false, 0), if num is nonzero and div is zero
+    let num = Field::square(&Scalar::TWO_INV);
+    let div = Scalar::zero();
+    let expected = Scalar::zero();
+    let (is_square, v) = Scalar::sqrt_ratio(&num, &div);
+    assert!(!bool::from(is_square));
+    assert!(v == expected);
 }
