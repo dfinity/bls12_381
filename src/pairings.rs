@@ -1,8 +1,9 @@
 use crate::fp::Fp;
-use crate::fp12::Fp12;
 use crate::fp2::Fp2;
 use crate::fp6::Fp6;
-use crate::{G1Affine, G1Projective, G2Affine, G2Projective, Scalar, BLS_X, BLS_X_IS_NEGATIVE};
+use crate::fp12::Fp12;
+use crate::g1::BETA;
+use crate::{BLS_X, BLS_X_IS_NEGATIVE, G1Affine, G1Projective, G2Affine, G2Projective, Scalar};
 
 use core::borrow::Borrow;
 use core::fmt;
@@ -10,8 +11,12 @@ use core::iter::Sum;
 use core::ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign};
 use group::Group;
 use pairing::{Engine, PairingCurveAffine};
-use rand_core::RngCore;
+use rand_core::TryRng;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq};
+
+const COMPRESSED_FIRST_SQUARES: usize = 15;
+const COMPRESSED_NEXT_SQUARES: usize = 32;
+const CYCLOTOMIC_TAIL_SQUARES: [usize; 4] = [9, 3, 2, 1];
 
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
@@ -40,6 +45,273 @@ impl ConditionallySelectable for MillerLoopResult {
     }
 }
 
+#[inline(always)]
+fn mul_fp2_by_fp(value: Fp2, factor: Fp) -> Fp2 {
+    Fp2 {
+        c0: value.c0 * factor,
+        c1: value.c1 * factor,
+    }
+}
+
+#[inline]
+fn frobenius_map_2(value: Fp12) -> Fp12 {
+    // BETA = (u + 1)^((p^2 - 1) / 3), which lies in Fp.
+    let gamma = BETA;
+    // gamma^2 + gamma + 1 = 0, and the w coefficient is -gamma^2.
+    let delta = gamma + Fp::one();
+    Fp12 {
+        c0: Fp6 {
+            c0: value.c0.c0,
+            c1: mul_fp2_by_fp(value.c0.c1, gamma),
+            c2: mul_fp2_by_fp(value.c0.c2, -delta),
+        },
+        c1: Fp6 {
+            c0: mul_fp2_by_fp(value.c1.c0, delta),
+            c1: -value.c1.c1,
+            c2: mul_fp2_by_fp(value.c1.c2, -gamma),
+        },
+    }
+}
+
+#[must_use]
+#[inline(never)]
+fn fp4_square(a: Fp2, b: Fp2) -> (Fp2, Fp2) {
+    let t0 = a.square();
+    let t1 = b.square();
+    let mut t2 = t1.mul_by_nonresidue();
+    let c0 = t2 + t0;
+    t2 = a + b;
+    t2 = t2.square();
+    t2 -= t0;
+    let c1 = t2 - t1;
+
+    (c0, c1)
+}
+
+// Adaptation of Algorithm 5.5.4, Guide to Pairing-Based Cryptography
+// Faster Squaring in the Cyclotomic Subgroup of Sixth Degree Extensions
+// https://eprint.iacr.org/2009/565.pdf
+#[must_use]
+#[inline(never)]
+fn cyclotomic_square(f: Fp12) -> Fp12 {
+    let mut z0 = f.c0.c0;
+    let mut z4 = f.c0.c1;
+    let mut z3 = f.c0.c2;
+    let mut z2 = f.c1.c0;
+    let mut z1 = f.c1.c1;
+    let mut z5 = f.c1.c2;
+
+    let (t0, t1) = fp4_square(z0, z1);
+
+    // For A
+    z0 = t0 - z0;
+    z0 = z0 + z0 + t0;
+
+    z1 = t1 + z1;
+    z1 = z1 + z1 + t1;
+
+    let (mut t0, t1) = fp4_square(z2, z3);
+    let (t2, t3) = fp4_square(z4, z5);
+
+    // For C
+    z4 = t0 - z4;
+    z4 = z4 + z4 + t0;
+
+    z5 = t1 + z5;
+    z5 = z5 + z5 + t1;
+
+    // For B
+    t0 = t3.mul_by_nonresidue();
+    z2 = t0 + z2;
+    z2 = z2 + z2 + t0;
+
+    z3 = t2 - z3;
+    z3 = z3 + z3 + t2;
+
+    Fp12 {
+        c0: Fp6 {
+            c0: z0,
+            c1: z4,
+            c2: z3,
+        },
+        c1: Fp6 {
+            c0: z2,
+            c1: z1,
+            c2: z5,
+        },
+    }
+}
+// Karabina compressed squaring retains these four coefficients. The omitted
+// coefficients must be reconstructed before ordinary Fp12 arithmetic.
+// Adapted from gnark-crypto's BLS12-381 fptower E12 implementation.
+#[derive(Copy, Clone)]
+struct CompressedCyclotomic {
+    z4: Fp2,
+    z3: Fp2,
+    z2: Fp2,
+    z5: Fp2,
+}
+
+impl From<Fp12> for CompressedCyclotomic {
+    fn from(value: Fp12) -> Self {
+        Self {
+            z4: value.c0.c1,
+            z3: value.c0.c2,
+            z2: value.c1.c0,
+            z5: value.c1.c2,
+        }
+    }
+}
+
+#[must_use]
+fn compressed_square(f: CompressedCyclotomic) -> CompressedCyclotomic {
+    let CompressedCyclotomic { z4, z3, z2, z5 } = f;
+
+    let z4_sq = z4.square();
+    let z5_sq = z5.square();
+    let twice_z4_z5 = (z4 + z5).square() - z4_sq - z5_sq;
+    let z2_sq = z2.square();
+    let z3_sq = z3.square();
+    let twice_z2_z3 = (z2 + z3).square() - z2_sq - z3_sq;
+
+    let a = z4_sq + z5_sq.mul_by_nonresidue();
+    let b = z2_sq + z3_sq.mul_by_nonresidue();
+    let c = twice_z4_z5.mul_by_nonresidue();
+
+    CompressedCyclotomic {
+        z4: b + b + b - z4 - z4,
+        z3: a + a + a - z3 - z3,
+        z2: c + c + c + z2 + z2,
+        z5: twice_z2_z3 + twice_z2_z3 + twice_z2_z3 + z5 + z5,
+    }
+}
+
+fn invert_fp6_vartime(value: Fp6) -> Option<Fp6> {
+    let c0 = value.c0.square() - (value.c1 * value.c2).mul_by_nonresidue();
+    let c1 = value.c2.square().mul_by_nonresidue() - value.c0 * value.c1;
+    let c2 = value.c1.square() - value.c0 * value.c2;
+    let determinant = (value.c1 * c2 + value.c2 * c1).mul_by_nonresidue() + value.c0 * c0;
+    let inverse = determinant.invert_vartime()?;
+    Some(Fp6 {
+        c0: inverse * c0,
+        c1: inverse * c1,
+        c2: inverse * c2,
+    })
+}
+
+fn invert_fp12_vartime(value: Fp12) -> Option<Fp12> {
+    let determinant = value.c0.square() - value.c1.square().mul_by_nonresidue();
+    let inverse = invert_fp6_vartime(determinant)?;
+    Some(Fp12 {
+        c0: value.c0 * inverse,
+        c1: value.c1 * -inverse,
+    })
+}
+
+fn decompress_pair(a: CompressedCyclotomic, b: CompressedCyclotomic) -> Option<(Fp12, Fp12)> {
+    fn numerator(f: CompressedCyclotomic) -> Fp2 {
+        let z4_sq = f.z4.square();
+        f.z5.square().mul_by_nonresidue() + z4_sq + z4_sq + z4_sq - f.z3 - f.z3
+    }
+    fn finish(f: CompressedCyclotomic, z1: Fp2) -> Fp12 {
+        let z0 =
+            (z1.square() + z1.square() + f.z2 * f.z5 - f.z3 * f.z4 - f.z3 * f.z4 - f.z3 * f.z4)
+                .mul_by_nonresidue()
+                + Fp2::one();
+        Fp12 {
+            c0: Fp6 {
+                c0: z0,
+                c1: f.z4,
+                c2: f.z3,
+            },
+            c1: Fp6 {
+                c0: f.z2,
+                c1: z1,
+                c2: f.z5,
+            },
+        }
+    }
+
+    let den_a = a.z2 + a.z2 + a.z2 + a.z2;
+    let den_b = b.z2 + b.z2 + b.z2 + b.z2;
+    // Batch two Fp2 inversions into one Fp inversion. A zero denominator
+    // makes the caller use the full cyclotomic exponentiation instead.
+    let inverse = (den_a * den_b).invert_vartime()?;
+    let z1_a = numerator(a) * (den_b * inverse);
+    let z1_b = numerator(b) * (den_a * inverse);
+    Some((finish(a, z1_a), finish(b, z1_b)))
+}
+
+#[inline(never)]
+fn cyclotomic_exp_full(f: Fp12) -> Fp12 {
+    let x = BLS_X;
+    let mut tmp = Fp12::one();
+    let mut found_one = false;
+    for i in (0..64).rev().map(|b| ((x >> b) & 1) == 1) {
+        if found_one {
+            tmp = cyclotomic_square(tmp)
+        } else {
+            found_one = i;
+        }
+
+        if i {
+            tmp *= f;
+        }
+    }
+
+    tmp.conjugate()
+}
+
+fn cyclotomic_exp(f: Fp12) -> Fp12 {
+    let mut power = CompressedCyclotomic::from(f);
+    for _ in 0..COMPRESSED_FIRST_SQUARES {
+        power = compressed_square(power);
+    }
+    let power_first = power;
+    for _ in 0..COMPRESSED_NEXT_SQUARES {
+        power = compressed_square(power);
+    }
+    let (power_first, mut power_next) = match decompress_pair(power_first, power) {
+        Some(pair) => pair,
+        None => return cyclotomic_exp_full(f),
+    };
+    let mut result = power_first * power_next;
+    for squarings in CYCLOTOMIC_TAIL_SQUARES {
+        for _ in 0..squarings {
+            power_next = cyclotomic_square(power_next);
+        }
+        result *= power_next;
+    }
+    cyclotomic_square(result.conjugate())
+}
+
+// The input must be in the cyclotomic subgroup. Passing a function item keeps
+// the choice of constant-time or variable-time exponentiation statically dispatched.
+fn final_exponentiation_hard(mut t2: Fp12, exp_by_x: impl Fn(Fp12) -> Fp12) -> Gt {
+    let mut f = t2;
+    let mut t1 = cyclotomic_square(t2).conjugate();
+    let mut t3 = exp_by_x(t2);
+    let mut t4 = t1 * t3;
+    t1 = exp_by_x(t4);
+    t4 = t4.conjugate();
+    f *= t4;
+    t4 = cyclotomic_square(t3);
+    let t0 = exp_by_x(t1);
+    t3 *= t0;
+    t3 = frobenius_map_2(t3);
+    f *= t3;
+    t4 *= exp_by_x(t0);
+    f *= exp_by_x(t4);
+    t4 *= t2.conjugate();
+    t2 *= t1;
+    t2 = frobenius_map_2(t2.frobenius_map());
+    f *= t2;
+    t4 = t4.frobenius_map();
+    f *= t4;
+
+    Gt(f)
+}
+
 impl MillerLoopResult {
     /// This performs a "final exponentiation" routine to convert the result
     /// of a Miller loop into an element of `Gt` with help of efficient squaring
@@ -47,138 +319,41 @@ impl MillerLoopResult {
     /// it can be compared with other elements of `Gt`.
     #[inline(never)]
     pub fn final_exponentiation(&self) -> Gt {
-        #[must_use]
-        #[inline(never)]
-        fn fp4_square(a: Fp2, b: Fp2) -> (Fp2, Fp2) {
-            let t0 = a.square();
-            let t1 = b.square();
-            let mut t2 = t1.mul_by_nonresidue();
-            let c0 = t2 + t0;
-            t2 = a + b;
-            t2 = t2.square();
-            t2 -= t0;
-            let c1 = t2 - t1;
-
-            (c0, c1)
-        }
-        // Adaptation of Algorithm 5.5.4, Guide to Pairing-Based Cryptography
-        // Faster Squaring in the Cyclotomic Subgroup of Sixth Degree Extensions
-        // https://eprint.iacr.org/2009/565.pdf
-        #[must_use]
-        #[inline(never)]
-        fn cyclotomic_square(f: Fp12) -> Fp12 {
-            let mut z0 = f.c0.c0;
-            let mut z4 = f.c0.c1;
-            let mut z3 = f.c0.c2;
-            let mut z2 = f.c1.c0;
-            let mut z1 = f.c1.c1;
-            let mut z5 = f.c1.c2;
-
-            let (t0, t1) = fp4_square(z0, z1);
-
-            // For A
-            z0 = t0 - z0;
-            z0 = z0 + z0 + t0;
-
-            z1 = t1 + z1;
-            z1 = z1 + z1 + t1;
-
-            let (mut t0, t1) = fp4_square(z2, z3);
-            let (t2, t3) = fp4_square(z4, z5);
-
-            // For C
-            z4 = t0 - z4;
-            z4 = z4 + z4 + t0;
-
-            z5 = t1 + z5;
-            z5 = z5 + z5 + t1;
-
-            // For B
-            t0 = t3.mul_by_nonresidue();
-            z2 = t0 + z2;
-            z2 = z2 + z2 + t0;
-
-            z3 = t2 - z3;
-            z3 = z3 + z3 + t2;
-
-            Fp12 {
-                c0: Fp6 {
-                    c0: z0,
-                    c1: z4,
-                    c2: z3,
-                },
-                c1: Fp6 {
-                    c0: z2,
-                    c1: z1,
-                    c2: z5,
-                },
-            }
-        }
-        #[must_use]
-        #[inline(never)]
-        fn cycolotomic_exp(f: Fp12) -> Fp12 {
-            let x = BLS_X;
-            let mut tmp = Fp12::one();
-            let mut found_one = false;
-            for i in (0..64).rev().map(|b| ((x >> b) & 1) == 1) {
-                if found_one {
-                    tmp = cyclotomic_square(tmp)
-                } else {
-                    found_one = i;
-                }
-
-                if i {
-                    tmp *= f;
-                }
-            }
-
-            tmp.conjugate()
-        }
-
-        let mut f = self.0;
-        let mut t0 = f
-            .frobenius_map()
-            .frobenius_map()
-            .frobenius_map()
-            .frobenius_map()
-            .frobenius_map()
-            .frobenius_map();
-
+        let f = self.0;
         // We unwrap() because `MillerLoopResult` can only be constructed
         // by a function within this crate, and we uphold the invariant
         // that the enclosed value is nonzero.
-        let mut t1 = f.invert().unwrap();
-
-        let mut t2 = t0 * t1;
-        t1 = t2;
-        t2 = t2.frobenius_map().frobenius_map();
-        t2 *= t1;
-        f = t2;
-        t1 = cyclotomic_square(t2).conjugate();
-        let mut t3 = cycolotomic_exp(t2);
-        let mut t4 = t1 * t3;
-        t1 = cycolotomic_exp(t4);
-        t4 = t4.conjugate();
-        f *= t4;
-        t4 = cyclotomic_square(t3);
-        t0 = cycolotomic_exp(t1);
-        t3 *= t0;
-        t3 = t3.frobenius_map().frobenius_map();
-        f *= t3;
-        t4 *= cycolotomic_exp(t0);
-        f *= cycolotomic_exp(t4);
-        t4 *= t2.conjugate();
-        t2 *= t1;
-        t2 = t2.frobenius_map().frobenius_map().frobenius_map();
-        f *= t2;
-        t4 = t4.frobenius_map();
-        f *= t4;
-
-        Gt(f)
+        let inverse = f.invert().unwrap();
+        // The p^6 Frobenius map conjugates the quadratic Fp12 extension.
+        let unitary = f.conjugate() * inverse;
+        let cyclotomic = frobenius_map_2(unitary) * unitary;
+        final_exponentiation_hard(cyclotomic, cyclotomic_exp_full)
     }
 }
 
-impl<'a, 'b> Add<&'b MillerLoopResult> for &'a MillerLoopResult {
+impl MillerLoopResult {
+    /// Converts the result of a Miller loop into an element of [`Gt`], using
+    /// efficient squaring in the cyclotomic subgroup of the degree-12 field
+    /// extension.
+    ///
+    /// This operation is variable time. Its inversions and compressed-square
+    /// fallback depend on the Miller loop result. Do not use it with secret
+    /// pairing inputs. Batch verification also includes fresh verifier
+    /// randomizers in this result; callers must accept their timing exposure.
+    fn final_exponentiation_vartime(&self) -> Gt {
+        let f = self.0;
+        // We unwrap() because `MillerLoopResult` can only be constructed
+        // by a function within this crate, and we uphold the invariant
+        // that the enclosed value is nonzero.
+        let inverse = invert_fp12_vartime(f).unwrap();
+        // The p^6 Frobenius map conjugates the quadratic Fp12 extension.
+        let unitary = f.conjugate() * inverse;
+        let cyclotomic = frobenius_map_2(unitary) * unitary;
+        final_exponentiation_hard(cyclotomic, cyclotomic_exp)
+    }
+}
+
+impl<'b> Add<&'b MillerLoopResult> for &MillerLoopResult {
     type Output = MillerLoopResult;
 
     #[inline]
@@ -269,7 +444,7 @@ impl Gt {
     }
 }
 
-impl<'a> Neg for &'a Gt {
+impl Neg for &Gt {
     type Output = Gt;
 
     #[inline]
@@ -288,7 +463,7 @@ impl Neg for Gt {
     }
 }
 
-impl<'a, 'b> Add<&'b Gt> for &'a Gt {
+impl<'b> Add<&'b Gt> for &Gt {
     type Output = Gt;
 
     #[inline]
@@ -297,7 +472,7 @@ impl<'a, 'b> Add<&'b Gt> for &'a Gt {
     }
 }
 
-impl<'a, 'b> Sub<&'b Gt> for &'a Gt {
+impl<'b> Sub<&'b Gt> for &Gt {
     type Output = Gt;
 
     #[inline]
@@ -306,7 +481,7 @@ impl<'a, 'b> Sub<&'b Gt> for &'a Gt {
     }
 }
 
-impl<'a, 'b> Mul<&'b Scalar> for &'a Gt {
+impl<'b> Mul<&'b Scalar> for &Gt {
     type Output = Gt;
 
     fn mul(self, other: &'b Scalar) -> Self::Output {
@@ -351,15 +526,15 @@ where
 impl Group for Gt {
     type Scalar = Scalar;
 
-    fn random(mut rng: impl RngCore) -> Self {
+    fn try_random<R: TryRng + ?Sized>(rng: &mut R) -> Result<Self, R::Error> {
         loop {
-            let inner = Fp12::random(&mut rng);
+            let inner = Fp12::try_random(rng)?;
 
             // Not all elements of Fp12 are elements of the prime-order multiplicative
             // subgroup. We run the random element through final_exponentiation to obtain
             // a valid element, which requires that it is non-zero.
             if !bool::from(inner.is_zero()) {
-                return MillerLoopResult(inner).final_exponentiation();
+                return Ok(MillerLoopResult(inner).final_exponentiation());
             }
         }
     }
@@ -506,10 +681,45 @@ impl Group for Gt {
 /// conjunction with the [`multi_miller_loop`](crate::multi_miller_loop)
 /// function provided by this crate.
 ///
+/// For a point reused across Miller loops, prepare it with
+/// [`MultiMillerLoop::prepare_reusable_g2`]. That performs extra work once to
+/// speed up each later loop. Its raw Miller result may differ from ordinary
+/// preparation, while the final pairing result remains the same.
+///
 /// Requires the `alloc` and `pairing` crate features to be enabled.
 pub struct G2Prepared {
     infinity: Choice,
+    normalized: bool,
     coeffs: Vec<(Fp2, Fp2, Fp2)>,
+}
+
+#[cfg(feature = "alloc")]
+impl G2Prepared {
+    fn normalize_lines_vartime(&mut self) {
+        // Every line may be scaled by a nonzero Fp2 element: the factor
+        // disappears in the final exponentiation. Make the unscaled line
+        // coefficient one so Miller multiplication needs two coefficients.
+        // Batch inversion pays for just one field inversion across all lines.
+        let mut prefixes = Vec::with_capacity(self.coeffs.len());
+        let mut product = Fp2::one();
+        for (_, _, c0) in &self.coeffs {
+            prefixes.push(product);
+            if !c0.is_zero_vartime() {
+                product *= c0;
+            }
+        }
+        let mut inverse = product.invert_vartime().expect("product is not zero");
+        for ((c4, c1, c0), prefix) in self.coeffs.iter_mut().zip(prefixes).rev() {
+            let factor = inverse * prefix;
+            if !c0.is_zero_vartime() {
+                inverse *= *c0;
+                *c4 *= factor;
+                *c1 *= factor;
+                *c0 = Fp2::one();
+            }
+        }
+        self.normalized = true;
+    }
 }
 
 #[cfg(feature = "alloc")]
@@ -552,6 +762,7 @@ impl From<G2Affine> for G2Prepared {
 
         G2Prepared {
             infinity: is_identity,
+            normalized: false,
             coeffs: adder.coeffs,
         }
     }
@@ -569,7 +780,7 @@ pub fn multi_miller_loop(terms: &[(&G1Affine, &G2Prepared)]) -> MillerLoopResult
         index: usize,
     }
 
-    impl<'a, 'b, 'c> MillerLoopDriver for Adder<'a, 'b, 'c> {
+    impl MillerLoopDriver for Adder<'_, '_, '_> {
         type Output = Fp12;
 
         fn doubling_step(&mut self, mut f: Self::Output) -> Self::Output {
@@ -577,7 +788,11 @@ pub fn multi_miller_loop(terms: &[(&G1Affine, &G2Prepared)]) -> MillerLoopResult
             for term in self.terms {
                 let either_identity = term.0.is_identity() | term.1.infinity;
 
-                let new_f = ell(f, &term.1.coeffs[index], term.0);
+                let new_f = if term.1.normalized {
+                    ell_prepared(f, &term.1.coeffs[index], term.0)
+                } else {
+                    ell(f, &term.1.coeffs[index], term.0)
+                };
                 f = Fp12::conditional_select(&new_f, &f, either_identity);
             }
             self.index += 1;
@@ -589,7 +804,11 @@ pub fn multi_miller_loop(terms: &[(&G1Affine, &G2Prepared)]) -> MillerLoopResult
             for term in self.terms {
                 let either_identity = term.0.is_identity() | term.1.infinity;
 
-                let new_f = ell(f, &term.1.coeffs[index], term.0);
+                let new_f = if term.1.normalized {
+                    ell_prepared(f, &term.1.coeffs[index], term.0)
+                } else {
+                    ell(f, &term.1.coeffs[index], term.0)
+                };
                 f = Fp12::conditional_select(&new_f, &f, either_identity);
             }
             self.index += 1;
@@ -705,7 +924,8 @@ fn miller_loop<D: MillerLoopDriver>(driver: &mut D) -> D::Output {
     f
 }
 
-fn ell(f: Fp12, coeffs: &(Fp2, Fp2, Fp2), p: &G1Affine) -> Fp12 {
+#[inline]
+fn evaluated_line(coeffs: &(Fp2, Fp2, Fp2), p: &G1Affine) -> (Fp2, Fp2) {
     let mut c0 = coeffs.0;
     let mut c1 = coeffs.1;
 
@@ -715,7 +935,50 @@ fn ell(f: Fp12, coeffs: &(Fp2, Fp2, Fp2), p: &G1Affine) -> Fp12 {
     c1.c0 *= p.x;
     c1.c1 *= p.x;
 
-    f.mul_by_014(&coeffs.2, &c1, &c0)
+    (c1, c0)
+}
+
+fn ell(f: Fp12, coeffs: &(Fp2, Fp2, Fp2), p: &G1Affine) -> Fp12 {
+    let (c1, c4) = evaluated_line(coeffs, p);
+    f.mul_by_014(&coeffs.2, &c1, &c4)
+}
+
+#[cfg(feature = "alloc")]
+fn ell_prepared(f: Fp12, coeffs: &(Fp2, Fp2, Fp2), p: &G1Affine) -> Fp12 {
+    let (c1, c4) = evaluated_line(coeffs, p);
+    if bool::from(coeffs.2.ct_eq(&Fp2::one())) {
+        mul_by_014_unit(&f, &c1, &c4)
+    } else {
+        f.mul_by_014(&coeffs.2, &c1, &c4)
+    }
+}
+
+#[cfg(feature = "alloc")]
+fn mul_by_014_unit(f: &Fp12, c1: &Fp2, c4: &Fp2) -> Fp12 {
+    #[inline]
+    fn sum_of_two_fp2_products(a: &Fp2, b: &Fp2, c: &Fp2, d: &Fp2) -> Fp2 {
+        Fp2 {
+            c0: Fp::sum_of_products([a.c0, -a.c1, c.c0, -c.c1], [b.c0, b.c1, d.c0, d.c1]),
+            c1: Fp::sum_of_products([a.c0, a.c1, c.c0, c.c1], [b.c1, b.c0, d.c1, d.c0]),
+        }
+    }
+
+    let xc1 = c1.mul_by_nonresidue();
+    let xc4 = c4.mul_by_nonresidue();
+    let a = &f.c0;
+    let b = &f.c1;
+    Fp12 {
+        c0: Fp6 {
+            c0: a.c0 + sum_of_two_fp2_products(&a.c2, &xc1, &b.c1, &xc4),
+            c1: a.c1 + sum_of_two_fp2_products(&a.c0, c1, &b.c2, &xc4),
+            c2: a.c2 + sum_of_two_fp2_products(&a.c1, c1, &b.c0, c4),
+        },
+        c1: Fp6 {
+            c0: b.c0 + sum_of_two_fp2_products(&a.c2, &xc4, &b.c2, &xc1),
+            c1: b.c1 + sum_of_two_fp2_products(&a.c0, c4, &b.c0, c1),
+            c2: b.c2 + sum_of_two_fp2_products(&a.c1, c4, &b.c1, c1),
+        },
+    }
 }
 
 fn doubling_step(r: &mut G2Projective) -> (Fp2, Fp2, Fp2) {
@@ -823,12 +1086,22 @@ impl pairing::MillerLoopResult for MillerLoopResult {
     fn final_exponentiation(&self) -> Self::Gt {
         self.final_exponentiation()
     }
+
+    fn final_exponentiation_vartime(&self) -> Self::Gt {
+        self.final_exponentiation_vartime()
+    }
 }
 
 #[cfg(feature = "alloc")]
 impl MultiMillerLoop for Bls12 {
     type G2Prepared = G2Prepared;
     type Result = MillerLoopResult;
+
+    fn prepare_reusable_g2(q: Self::G2Affine) -> Self::G2Prepared {
+        let mut prepared = G2Prepared::from(q);
+        prepared.normalize_lines_vartime();
+        prepared
+    }
 
     fn multi_miller_loop(terms: &[(&Self::G1Affine, &Self::G2Prepared)]) -> Self::Result {
         multi_miller_loop(terms)
@@ -932,6 +1205,77 @@ fn test_multi_miller_loop() {
     assert_eq!(expected, test);
 }
 
+#[cfg(feature = "alloc")]
+#[test]
+fn test_reusable_g2_preparation() {
+    let p = G1Affine::generator();
+    let q = G2Affine::from(G2Projective::generator() * Scalar::from(17));
+    let raw = G2Prepared::from(q);
+    let normalized = Bls12::prepare_reusable_g2(q);
+
+    assert!(
+        normalized
+            .coeffs
+            .iter()
+            .all(|(_, _, c0)| bool::from(c0.is_zero()) || *c0 == Fp2::one())
+    );
+    assert_eq!(
+        multi_miller_loop(&[(&p, &raw)]).final_exponentiation(),
+        multi_miller_loop(&[(&p, &normalized)]).final_exponentiation(),
+    );
+    assert_eq!(
+        multi_miller_loop(&[(&p, &raw), (&p, &normalized)]).final_exponentiation(),
+        pairing(&p, &q) + pairing(&p, &q),
+    );
+
+    let mut raw_with_zero = raw.clone();
+    raw_with_zero.coeffs[17].2 = Fp2::zero();
+    let mut normalized_with_zero = raw_with_zero.clone();
+    normalized_with_zero.normalize_lines_vartime();
+    assert_eq!(normalized_with_zero.coeffs[17], raw_with_zero.coeffs[17]);
+    assert_eq!(
+        multi_miller_loop(&[(&p, &raw_with_zero)]).final_exponentiation(),
+        multi_miller_loop(&[(&p, &normalized_with_zero)]).final_exponentiation(),
+    );
+
+    let infinity = Bls12::prepare_reusable_g2(G2Affine::identity());
+    assert_eq!(
+        multi_miller_loop(&[(&p, &infinity)]).final_exponentiation(),
+        Gt::identity(),
+    );
+}
+
+#[cfg(feature = "alloc")]
+#[test]
+fn test_mul_by_014_unit_matches_sparse_product() {
+    use rand_core::SeedableRng;
+
+    let mut rng = rand_xorshift::XorShiftRng::from_seed([0x5a; 16]);
+    for _ in 0..32 {
+        let f = Fp12::try_random(&mut rng).unwrap();
+        let c1 = Fp2::try_random(&mut rng).unwrap();
+        let c4 = Fp2::try_random(&mut rng).unwrap();
+        assert_eq!(
+            mul_by_014_unit(&f, &c1, &c4),
+            f.mul_by_014(&Fp2::one(), &c1, &c4)
+        );
+    }
+}
+
+#[test]
+fn test_frobenius_map_2_matches_two_maps() {
+    use rand_core::SeedableRng;
+
+    let mut rng = rand_xorshift::XorShiftRng::from_seed([0x2f; 16]);
+    for _ in 0..32 {
+        let value = Fp12::try_random(&mut rng).unwrap();
+        assert_eq!(
+            frobenius_map_2(value),
+            value.frobenius_map().frobenius_map()
+        );
+    }
+}
+
 #[test]
 fn test_miller_loop_result_default() {
     assert_eq!(
@@ -953,6 +1297,7 @@ fn test_miller_loop_result_zeroize() {
     assert_eq!(m.0, MillerLoopResult::default().0);
 }
 
+#[cfg(feature = "alloc")]
 #[test]
 fn tricking_miller_loop_result() {
     assert_eq!(
@@ -996,10 +1341,20 @@ fn test_gt_zeroize() {
 fn test_gt_to_bytes() {
     let gt = Gt::generator();
 
-    assert_eq!(hex::encode(gt.to_bytes()),
-               "0f41e58663bf08cf068672cbd01a7ec73baca4d72ca93544deff686bfd6df543d48eaa24afe47e1efde449383b67663104c581234d086a9902249b64728ffd21a189e87935a954051c7cdba7b3872629a4fafc05066245cb9108f0242d0fe3ef03350f55a7aefcd3c31b4fcb6ce5771cc6a0e9786ab5973320c806ad360829107ba810c5a09ffdd9be2291a0c25a99a211b8b424cd48bf38fcef68083b0b0ec5c81a93b330ee1a677d0d15ff7b984e8978ef48881e32fac91b93b47333e2ba5706fba23eb7c5af0d9f80940ca771b6ffd5857baaf222eb95a7d2809d61bfe02e1bfd1b68ff02f0b8102ae1c2d5d5ab1a19f26337d205fb469cd6bd15c3d5a04dc88784fbb3d0b2dbdea54d43b2b73f2cbb12d58386a8703e0f948226e47ee89d018107154f25a764bd3c79937a45b84546da634b8f6be14a8061e55cceba478b23f7dacaa35c8ca78beae9624045b4b601b2f522473d171391125ba84dc4007cfbf2f8da752f7c74185203fcca589ac719c34dffbbaad8431dad1c1fb597aaa5193502b86edb8857c273fa075a50512937e0794e1e65a7617c90d8bd66065b1fffe51d7a579973b1315021ec3c19934f1368bb445c7c2d209703f239689ce34c0378a68e72a6b3b216da0e22a5031b54ddff57309396b38c881c4c849ec23e87089a1c5b46e5110b86750ec6a532348868a84045483c92b7af5af689452eafabf1a8943e50439f1d59882a98eaa0170f1250ebd871fc0a92a7b2d83168d0d727272d441befa15c503dd8e90ce98db3e7b6d194f60839c508a84305aaca1789b6");
+    assert_eq!(
+        hex::encode(gt.to_bytes()),
+        "0f41e58663bf08cf068672cbd01a7ec73baca4d72ca93544deff686bfd6df543d48eaa24afe47e1efde449383b67663104c581234d086a9902249b64728ffd21a189e87935a954051c7cdba7b3872629a4fafc05066245cb9108f0242d0fe3ef03350f55a7aefcd3c31b4fcb6ce5771cc6a0e9786ab5973320c806ad360829107ba810c5a09ffdd9be2291a0c25a99a211b8b424cd48bf38fcef68083b0b0ec5c81a93b330ee1a677d0d15ff7b984e8978ef48881e32fac91b93b47333e2ba5706fba23eb7c5af0d9f80940ca771b6ffd5857baaf222eb95a7d2809d61bfe02e1bfd1b68ff02f0b8102ae1c2d5d5ab1a19f26337d205fb469cd6bd15c3d5a04dc88784fbb3d0b2dbdea54d43b2b73f2cbb12d58386a8703e0f948226e47ee89d018107154f25a764bd3c79937a45b84546da634b8f6be14a8061e55cceba478b23f7dacaa35c8ca78beae9624045b4b601b2f522473d171391125ba84dc4007cfbf2f8da752f7c74185203fcca589ac719c34dffbbaad8431dad1c1fb597aaa5193502b86edb8857c273fa075a50512937e0794e1e65a7617c90d8bd66065b1fffe51d7a579973b1315021ec3c19934f1368bb445c7c2d209703f239689ce34c0378a68e72a6b3b216da0e22a5031b54ddff57309396b38c881c4c849ec23e87089a1c5b46e5110b86750ec6a532348868a84045483c92b7af5af689452eafabf1a8943e50439f1d59882a98eaa0170f1250ebd871fc0a92a7b2d83168d0d727272d441befa15c503dd8e90ce98db3e7b6d194f60839c508a84305aaca1789b6"
+    );
 
     let gt_5 = Gt::generator() * Scalar::from_raw([5, 0, 0, 0]);
-    assert_eq!(hex::encode(gt_5.to_bytes()),
-               "010d53c3584cd7fa75702c1f9f386c1c81cc0752e8f2246a29fa7541f46efadf54bfbef7010b7e8eb5587ec046783eb2079961bfb6f05645db521c64d2d6ba6ba55ebbe7f75a98c2767405376a5f045f7b72edb4830ef09d3986ee9e71e4b0aa126b3e9f20a56f99751b762c0a960f3fe7b6bfa703dd48565c018bf89e238517f8edf4ae142c255c3454a8b87b885008102f22314d07bcd41a526d705a6666244ceadb66c0edf8638be4d1f83146724afd50447cae2b4c3c871fa95cb2c19a090cb3cae518c19e9a19976eac7ff916831b5a9615976092b292715e9d722b95c846210cb652a189258c72a23ce24abc950cac035514234d0a9e25ec72a8f0eaa7c6ca8f3e8c3029a795312061da788bf87befda68f43e7443c0f4cbfb097e2d651953829ead231efdf14bc5084bd9465cfa00aeccfe45075c08ebe8ea5d2055f01239dad90c0e24059a020b16baef8b58057ff9073ba6bd3ca984fb1048160f935504e06db75af2df87f548fcdf4248eacc1a7d94b654c0839e0debceea02d5c615d8a32c3a4dc63053772b2c1ce4cffbb9d6c469316519cf21142e7ac7c39484a1c019396253e1211748bb71725d32bc0c0dd7b418052d43ab693363b9dc50d984b0aa858e9b1a61b4f325567d14fdd0a0081196de0df342037284d7cd4b8bd300a51433c6b5380c128c249aa77db74201f0baa006506e121eb4a561801d4e31cad3ebe967b27a7ea896cec25034216413146395211448f4a687a777c604d7749e27a935ad0b6878db242354760cbdd415a60448d750056f4d40d0d67b9064b7");
+    assert_eq!(
+        hex::encode(gt_5.to_bytes()),
+        "010d53c3584cd7fa75702c1f9f386c1c81cc0752e8f2246a29fa7541f46efadf54bfbef7010b7e8eb5587ec046783eb2079961bfb6f05645db521c64d2d6ba6ba55ebbe7f75a98c2767405376a5f045f7b72edb4830ef09d3986ee9e71e4b0aa126b3e9f20a56f99751b762c0a960f3fe7b6bfa703dd48565c018bf89e238517f8edf4ae142c255c3454a8b87b885008102f22314d07bcd41a526d705a6666244ceadb66c0edf8638be4d1f83146724afd50447cae2b4c3c871fa95cb2c19a090cb3cae518c19e9a19976eac7ff916831b5a9615976092b292715e9d722b95c846210cb652a189258c72a23ce24abc950cac035514234d0a9e25ec72a8f0eaa7c6ca8f3e8c3029a795312061da788bf87befda68f43e7443c0f4cbfb097e2d651953829ead231efdf14bc5084bd9465cfa00aeccfe45075c08ebe8ea5d2055f01239dad90c0e24059a020b16baef8b58057ff9073ba6bd3ca984fb1048160f935504e06db75af2df87f548fcdf4248eacc1a7d94b654c0839e0debceea02d5c615d8a32c3a4dc63053772b2c1ce4cffbb9d6c469316519cf21142e7ac7c39484a1c019396253e1211748bb71725d32bc0c0dd7b418052d43ab693363b9dc50d984b0aa858e9b1a61b4f325567d14fdd0a0081196de0df342037284d7cd4b8bd300a51433c6b5380c128c249aa77db74201f0baa006506e121eb4a561801d4e31cad3ebe967b27a7ea896cec25034216413146395211448f4a687a777c604d7749e27a935ad0b6878db242354760cbdd415a60448d750056f4d40d0d67b9064b7"
+    );
 }
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+mod trait_tests;

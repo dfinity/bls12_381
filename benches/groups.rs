@@ -3,9 +3,11 @@ extern crate criterion;
 
 extern crate ic_bls12_381;
 use ic_bls12_381::*;
+use pairing::{MillerLoopResult, MultiMillerLoop};
 
-use criterion::{black_box, Criterion};
+use criterion::{Criterion, black_box};
 
+#[allow(clippy::many_single_char_names)]
 fn criterion_benchmark(c: &mut Criterion) {
     // Pairings
     {
@@ -21,10 +23,50 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function("miller loop for pairing", move |b| {
             b.iter(|| multi_miller_loop(&[(&g, &prep)]))
         });
+        c.bench_function("G2 reusable preparation for pairing", move |b| {
+            b.iter(|| Bls12::prepare_reusable_g2(black_box(h)))
+        });
+        let reusable = Bls12::prepare_reusable_g2(h);
+        c.bench_function("miller loop for reusable pairing", move |b| {
+            b.iter(|| multi_miller_loop(&[(&g, &reusable)]))
+        });
+        let points = (1..=11)
+            .map(|i| G1Affine::from(G1Projective::generator() * Scalar::from(i)))
+            .collect::<Vec<_>>();
+        let prepared = (1..=11)
+            .map(|i| G2Prepared::from(G2Affine::from(G2Projective::generator() * Scalar::from(i))))
+            .collect::<Vec<_>>();
+        let terms = points.iter().zip(prepared.iter()).collect::<Vec<_>>();
+        let reusable_prepared = (1..=11)
+            .map(|i| {
+                Bls12::prepare_reusable_g2(G2Affine::from(
+                    G2Projective::generator() * Scalar::from(i),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let reusable_terms = points
+            .iter()
+            .zip(reusable_prepared.iter())
+            .collect::<Vec<_>>();
+        c.bench_function("miller loop for three pairings", |b| {
+            b.iter(|| multi_miller_loop(black_box(&terms[..3])))
+        });
+        c.bench_function("miller loop for eleven pairings", |b| {
+            b.iter(|| multi_miller_loop(black_box(&terms)))
+        });
+        c.bench_function("miller loop for three reusable pairings", |b| {
+            b.iter(|| multi_miller_loop(black_box(&reusable_terms[..3])))
+        });
+        c.bench_function("miller loop for eleven reusable pairings", |b| {
+            b.iter(|| multi_miller_loop(black_box(&reusable_terms)))
+        });
         let prep = G2Prepared::from(h);
         let r = multi_miller_loop(&[(&g, &prep)]);
         c.bench_function("final exponentiation for pairing", move |b| {
             b.iter(|| r.final_exponentiation())
+        });
+        c.bench_function("variable-time final exponentiation for pairing", move |b| {
+            b.iter(|| r.final_exponentiation_vartime())
         });
     }
     // G1Affine
@@ -75,6 +117,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         c.bench_function(&format!("{} to affine", name), move |b| {
             b.iter(|| G1Affine::from(black_box(a)))
+        });
+        let point = a * s;
+        c.bench_function("G1Projective to affine nontrivial", move |b| {
+            b.iter(|| G1Affine::from(black_box(point)))
+        });
+        c.bench_function("G1Projective to affine vartime", move |b| {
+            b.iter(|| black_box(&point).to_affine_vartime())
         });
         c.bench_function(&format!("{} doubling", name), move |b| {
             b.iter(|| black_box(a).double())
@@ -144,6 +193,13 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         c.bench_function(&format!("{} to affine", name), move |b| {
             b.iter(|| G2Affine::from(black_box(a)))
+        });
+        let point = a * s;
+        c.bench_function("G2Projective to affine nontrivial", move |b| {
+            b.iter(|| G2Affine::from(black_box(point)))
+        });
+        c.bench_function("G2Projective to affine vartime", move |b| {
+            b.iter(|| black_box(&point).to_affine_vartime())
         });
         c.bench_function(&format!("{} doubling", name), move |b| {
             b.iter(|| black_box(a).double())

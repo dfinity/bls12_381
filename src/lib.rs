@@ -46,8 +46,12 @@ pub mod notes {
 
 mod scalar;
 
+#[cfg(feature = "sqrt-table")]
+mod sqrt_table;
+
 pub use scalar::Scalar;
 
+mod chains;
 #[cfg(feature = "groups")]
 mod fp;
 #[cfg(feature = "groups")]
@@ -56,6 +60,8 @@ mod fp2;
 mod g1;
 #[cfg(feature = "groups")]
 mod g2;
+#[cfg(feature = "groups")]
+mod scalar_mul;
 
 #[cfg(feature = "groups")]
 pub use g1::{G1Affine, G1Projective};
@@ -77,10 +83,10 @@ const BLS_X_IS_NEGATIVE: bool = true;
 mod pairings;
 
 #[cfg(feature = "pairings")]
-pub use pairings::{pairing, Bls12, Gt, MillerLoopResult};
+pub use pairings::{Bls12, Gt, MillerLoopResult, pairing};
 
 #[cfg(all(feature = "pairings", feature = "alloc"))]
-pub use pairings::{multi_miller_loop, G2Prepared};
+pub use pairings::{G2Prepared, multi_miller_loop};
 
 /// Use the generic_array re-exported by digest to avoid a version mismatch
 #[cfg(feature = "experimental")]

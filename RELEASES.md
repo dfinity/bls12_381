@@ -1,5 +1,16 @@
 # Unreleased
 
+## Changed
+- Based on bls12_381 0.9.2 (see the upstream release notes for 0.9.0, 0.9.1
+  and 0.9.2 below). This includes breaking changes, notably:
+  - MSRV is now 1.85.0, and the crate uses the 2024 edition.
+  - Bumped dependencies to `ff 0.14`, `group 0.14`, `pairing 0.24`,
+    `rand_core 0.10`.
+  - `experimental`: Hashing to curves now implements Internet Draft v16, and
+    its API has changed (e.g. `HashToCurve::hash_to_curve` now takes a
+    `Message`, such as `[msg]`, instead of `impl AsRef<[u8]>`).
+  - New `sqrt-table` feature flag, enabled by default (requires `alloc`).
+
 # ic_bls12_381 0.10.1
 ## Changed
 - Work around an LLVM bug which caused very slow compilation when
@@ -29,6 +40,37 @@
 - Based on bls12_381 0.7
 - Support serialization of Gt elements
 - Add zeroize support for Gt
+
+# 0.9.2
+## Changed
+- Raised `pairing` minimum version to `0.24.2`, to provide a more efficient
+  implementation of `pairing::MillerLoopResult::final_exponentiation_vartime`.
+- Improved performance.
+
+## Fixed
+- The `groups` feature flag was broken by 0.9.1; it now works again without the
+  `pairings` feature flag.
+
+# 0.9.1
+## Added
+- `sqrt-table` feature flag (enabled by default), which enables large
+  precomputed tables (stored on the heap) that speed up square root
+  computation.
+- `bls12_381::G1Projective::to_affine_vartime`
+- `bls12_381::G2Projective::to_affine_vartime`
+
+## Changed
+- Raised `pairing` minimum version to `0.24.1`, to provide a more efficient
+  implementation of `pairing::MultiMillerLoop::prepare_reusable_g2`.
+- Improved performance.
+
+# 0.9.0
+## Changed
+- MSRV is now 1.85.0.
+- Bumped dependencies to `digest 0.10`, `ff 0.14`, `group 0.14`, `pairing 0.24`,
+  `rand_core 0.10`.
+- `experimental`: Migrated to Hashing to curves
+  ([Internet Draft v16](https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-hash-to-curve-16)).
 
 # 0.8.0
 ## Changed
