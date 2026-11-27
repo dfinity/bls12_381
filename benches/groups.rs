@@ -5,7 +5,8 @@ extern crate ic_bls12_381;
 use ic_bls12_381::*;
 use pairing::{MillerLoopResult, MultiMillerLoop};
 
-use criterion::{Criterion, black_box};
+use criterion::Criterion;
+use std::hint::black_box;
 
 #[allow(clippy::many_single_char_names)]
 fn criterion_benchmark(c: &mut Criterion) {
