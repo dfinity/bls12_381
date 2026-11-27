@@ -162,27 +162,11 @@ pub(crate) fn pow_by_p_minus1_over2(x: &Fp2) -> Fp2 {
 #[cfg(feature = "experimental")]
 #[inline(always)]
 pub(crate) fn pow_by_p_squared_minus9_over16(x: &Fp2) -> Fp2 {
-    if cfg!(any(target_arch = "wasm32", target_arch = "arm")) {
-        /*
-         * We skip the precomputed addition chain and directly execute the
-         * exponentiation using a standard square-and-multiply algorithm on:
-         *
-         * - wasm32: LLVM (and therefore Rust) have a bug which causes incredibly
-         *   slow compilation of long straight-line functions like this one when
-         *   building for wasm targets without the bulk-memory feature. Release
-         *   builds with LTO and debug info can take several minutes (observed with
-         *   Rust 1.85 for wasm32-unknown-unknown).
-         * - arm: the addition chain needs several KiB of stack, which is too much
-         *   for small devices such as Ledger (see pow_by_p_minus1_over2).
-         *
-         * The exponent is public, so this is still constant time in `x`.
-         *
-         * For reference
-         *
-         * https://github.com/rust-lang/rust/issues/91011
-         * https://github.com/rust-lang/rust/issues/115216
-         * https://github.com/llvm/llvm-project/issues/47793
-         */
+    if cfg!(target_arch = "arm") {
+        // On 32-bit ARM (e.g. Ledger devices) use square-and-multiply: the addition
+        // chain below keeps each intermediate value in its own stack slot and needs
+        // several KiB of stack. The exponent is public, so this is still constant
+        // time in `x`.
         let p_sq_m9_over16 = [
             0xb26a_a000_01c7_18e3,
             0xd7ce_d6b1_d763_82ea,

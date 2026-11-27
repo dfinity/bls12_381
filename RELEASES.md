@@ -28,6 +28,10 @@
 - On 32-bit ARM targets (e.g. Ledger devices), `Fp`/`Fp2` inversion, square
   roots and hashing to curves use square-and-multiply instead of upstream's new
   addition chains, which need several KiB of additional stack.
+- Removed the wasm32 workaround for slow compilation from ic_bls12_381 0.10.1.
+  Upstream's new addition chain for hashing to G2 compiles quickly with recent
+  Rust toolchains (e.g. 1.100.0), and is about 12% faster than the
+  square-and-multiply fallback on wasm32.
 
 # ic_bls12_381 0.10.1
 ## Changed
