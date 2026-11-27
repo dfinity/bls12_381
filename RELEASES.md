@@ -4,12 +4,23 @@
 - Based on bls12_381 0.9.2 (see the upstream release notes for 0.9.0, 0.9.1
   and 0.9.2 below). This includes breaking changes, notably:
   - MSRV is now 1.85.0, and the crate uses the 2024 edition.
-  - Bumped dependencies to `ff 0.14`, `group 0.14`, `pairing 0.24`,
-    `rand_core 0.10`.
-  - `experimental`: Hashing to curves now implements Internet Draft v16, and
-    its API has changed (e.g. `HashToCurve::hash_to_curve` now takes a
-    `Message`, such as `[msg]`, instead of `impl AsRef<[u8]>`).
-  - New `sqrt-table` feature flag, enabled by default (requires `alloc`).
+  - Bumped dependencies to `ff 0.14`, `group 0.14`, `pairing 0.24.2` and
+    `rand_core 0.10`. For example, `Field::random` and `Group::random` now
+    take `&mut R` with `R: rand_core::Rng`, `group::Curve::AffineRepr` is now
+    `Curve::Affine`, and the `PrimeCurveAffine` methods moved to
+    `group::CurveAffine`.
+  - `experimental`: Hashing to curves now follows Internet Draft v16 (hash
+    outputs are unchanged), and its API has changed:
+    `HashToCurve::{hash_to_curve, encode_to_curve}` and
+    `HashToField::hash_to_field` take a `Message`, such as `[msg]`, instead of
+    `impl AsRef<[u8]>` or `&[u8]`; `ExpandMessageState` and
+    `InitExpandMessage` were merged into `ExpandMessage`; and `HashToField`
+    has a new `XofOutputLength` associated type.
+  - `experimental` now enables `groups`.
+  - New `sqrt-table` feature flag, enabled by default (requires `alloc`). It
+    speeds up `Scalar` square roots with precomputed tables whose memory
+    accesses depend on the input. It needs atomic compare-and-swap, so
+    thumbv6m-none-eabi builds need `default-features = false`.
 - Avoid a variable-time division of secret scalar digits in upstream's new
   radix-3 scalar recoding (used by `G1Projective`/`G2Projective` scalar
   multiplication) on targets without native 64-bit division, such as
