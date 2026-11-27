@@ -13,6 +13,21 @@ impl_pow_by_p_minus3_over4!(Fp2);
 /// `pow_vartime` over the same constant costs 384 squarings and 229 multiplications).
 #[inline(always)]
 pub(crate) fn pow_by_p_minus1_over2(x: &Fp2) -> Fp2 {
+    if cfg!(target_arch = "arm") {
+        // On 32-bit ARM (e.g. Ledger devices) use square-and-multiply, as earlier
+        // versions did: the addition chain below keeps each intermediate value in
+        // its own stack slot and needs several KiB of stack. The exponent is
+        // public, so this is still constant time in `x`.
+        return x.pow_vartime(&[
+            0xdcff_7fff_ffff_d555,
+            0x0f55_ffff_58a9_ffff,
+            0xb398_6950_7b58_7b12,
+            0xb23b_a5c2_79c2_895f,
+            0x258d_d3db_21a5_d66b,
+            0x0d00_88f5_1cbf_f34d,
+        ]);
+    }
+
     let t1 = x.square();
     let t2 = t1.square();
     let t3 = t2.square();
@@ -147,16 +162,20 @@ pub(crate) fn pow_by_p_minus1_over2(x: &Fp2) -> Fp2 {
 #[cfg(feature = "experimental")]
 #[inline(always)]
 pub(crate) fn pow_by_p_squared_minus9_over16(x: &Fp2) -> Fp2 {
-    if cfg!(target_arch = "wasm32") {
+    if cfg!(any(target_arch = "wasm32", target_arch = "arm")) {
         /*
-         * LLVM (and therefore Rust) have a bug which causes incredibly slow
-         * compilation of certain functions when building for wasm targets. This bug
-         * unfortunately affects compilation of this function, causing builds for
-         * wasm32-unknown-unknown to take several minutes in release mode.
+         * We skip the precomputed addition chain and directly execute the
+         * exponentiation using a standard square-and-multiply algorithm on:
          *
-         * We workaround it by skipping the precomputed addition chain and just
-         * directly executing the exponentation using a standard square-and-multiply
-         * algorithm.
+         * - wasm32: LLVM (and therefore Rust) have a bug which causes incredibly
+         *   slow compilation of long straight-line functions like this one when
+         *   building for wasm targets without the bulk-memory feature. Release
+         *   builds with LTO and debug info can take several minutes (observed with
+         *   Rust 1.85 for wasm32-unknown-unknown).
+         * - arm: the addition chain needs several KiB of stack, which is too much
+         *   for small devices such as Ledger (see pow_by_p_minus1_over2).
+         *
+         * The exponent is public, so this is still constant time in `x`.
          *
          * For reference
          *

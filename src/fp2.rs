@@ -340,8 +340,9 @@ impl Fp2 {
         res
     }
 
-    /// Vartime exponentiation for larger exponents, only
-    /// used in testing and not exposed through the public API.
+    /// Vartime exponentiation for larger exponents. It is only variable time
+    /// with respect to the exponent, and is used by the wasm32 and arm fallback
+    /// in `chains::fp2` and in tests. It is not exposed through the public API.
     #[cfg(feature = "experimental")]
     pub(crate) fn pow_vartime_extended(&self, by: &[u64]) -> Self {
         let mut res = Self::one();

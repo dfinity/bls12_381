@@ -14,6 +14,21 @@ impl_pow_by_p_minus3_over4!(Fp);
 /// `pow_vartime` over the same constant costs 384 squarings and 229 multiplications).
 #[inline(always)]
 pub(crate) fn pow_by_p_plus1_over4(x: &Fp) -> Fp {
+    if cfg!(target_arch = "arm") {
+        // On 32-bit ARM (e.g. Ledger devices) use square-and-multiply, as earlier
+        // versions did: the addition chain below keeps each intermediate value in
+        // its own stack slot and needs several KiB of stack. The exponent is
+        // public, so this is still constant time in `x`.
+        return x.pow_vartime(&[
+            0xee7f_bfff_ffff_eaab,
+            0x07aa_ffff_ac54_ffff,
+            0xd9cc_34a8_3dac_3d89,
+            0xd91d_d2e1_3ce1_44af,
+            0x92c6_e9ed_90d2_eb35,
+            0x0680_447a_8e5f_f9a6,
+        ]);
+    }
+
     let t1 = x.square();
     let t2 = t1.square();
     let t3 = t2 * t1;
@@ -145,6 +160,21 @@ pub(crate) fn pow_by_p_plus1_over4(x: &Fp) -> Fp {
 /// `pow_vartime` over the same constant costs 384 squarings and 229 multiplications).
 #[inline(always)]
 pub(crate) fn pow_by_p_minus2(x: &Fp) -> Fp {
+    if cfg!(target_arch = "arm") {
+        // On 32-bit ARM (e.g. Ledger devices) use square-and-multiply, as earlier
+        // versions did: the addition chain below keeps each intermediate value in
+        // its own stack slot and needs several KiB of stack. The exponent is
+        // public, so this is still constant time in `x`.
+        return x.pow_vartime(&[
+            0xb9fe_ffff_ffff_aaa9,
+            0x1eab_fffe_b153_ffff,
+            0x6730_d2a0_f6b0_f624,
+            0x6477_4b84_f385_12bf,
+            0x4b1b_a7b6_434b_acd7,
+            0x1a01_11ea_397f_e69a,
+        ]);
+    }
+
     let t1 = x.square();
     let t2 = t1.square();
     let t3 = t2.square();

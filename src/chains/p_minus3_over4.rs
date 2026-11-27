@@ -14,6 +14,21 @@ macro_rules! impl_pow_by_p_minus3_over4 {
         /// multiplications).
         #[inline(always)]
         pub(crate) fn pow_by_p_minus3_over4(x: &$field) -> $field {
+            if cfg!(target_arch = "arm") {
+                // On 32-bit ARM (e.g. Ledger devices) use square-and-multiply, as earlier
+                // versions did: the addition chain below keeps each intermediate value in
+                // its own stack slot and needs several KiB of stack. The exponent is
+                // public, so this is still constant time in `x`.
+                return x.pow_vartime(&[
+                    0xee7f_bfff_ffff_eaaa,
+                    0x07aa_ffff_ac54_ffff,
+                    0xd9cc_34a8_3dac_3d89,
+                    0xd91d_d2e1_3ce1_44af,
+                    0x92c6_e9ed_90d2_eb35,
+                    0x0680_447a_8e5f_f9a6,
+                ]);
+            }
+
             let t1 = x.square();
             let t2 = t1.square();
             let t3 = t2 * t1;

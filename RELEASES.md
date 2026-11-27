@@ -14,6 +14,9 @@
   radix-3 scalar recoding (used by `G1Projective`/`G2Projective` scalar
   multiplication) on targets without native 64-bit division, such as
   thumbv6m-none-eabi and wasm32.
+- On 32-bit ARM targets (e.g. Ledger devices), `Fp`/`Fp2` inversion, square
+  roots and hashing to curves use square-and-multiply instead of upstream's new
+  addition chains, which need several KiB of additional stack.
 
 # ic_bls12_381 0.10.1
 ## Changed
