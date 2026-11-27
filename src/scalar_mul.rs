@@ -20,7 +20,12 @@ pub(crate) fn to_radix_3(by: &[u8; 32]) -> [u8; 162] {
         // dividend fits in 34 bits because the incoming remainder is < 3.
         for limb in limbs.iter_mut().rev() {
             let dividend = (remainder << 32) | u64::from(*limb);
-            let quotient = dividend / 3;
+            // Divide by 3 by multiplying with ceil(2^65 / 3), which is exact for every
+            // u64. A `/` would compile to a variable-time division of this secret value
+            // on targets without a native 64-bit divide (e.g. __aeabi_uldivmod on
+            // thumbv6m), or to an i64.div_u on wasm32 that engines may execute as a
+            // hardware division (e.g. Cranelift at OptLevel::None, as used by the IC).
+            let quotient = ((u128::from(dividend) * 0xAAAA_AAAA_AAAA_AAAB) >> 65) as u64;
             remainder = dividend - quotient * 3;
             *limb = quotient as u32;
         }

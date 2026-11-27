@@ -10,6 +10,10 @@
     its API has changed (e.g. `HashToCurve::hash_to_curve` now takes a
     `Message`, such as `[msg]`, instead of `impl AsRef<[u8]>`).
   - New `sqrt-table` feature flag, enabled by default (requires `alloc`).
+- Avoid a variable-time division of secret scalar digits in upstream's new
+  radix-3 scalar recoding (used by `G1Projective`/`G2Projective` scalar
+  multiplication) on targets without native 64-bit division, such as
+  thumbv6m-none-eabi and wasm32.
 
 # ic_bls12_381 0.10.1
 ## Changed
